@@ -440,7 +440,9 @@ app.whenReady().then(async () => {
   createWindow()
   const cfg = loadConfig()
   if (cfg.auto_start_proxy && cfg.providers.length) {
-    await startProxy(cfg.router_port)
+    setTimeout(() => {
+      startProxy(cfg.router_port).catch((err) => log(`Auto start router failed: ${err}`))
+    }, 800)
   }
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
