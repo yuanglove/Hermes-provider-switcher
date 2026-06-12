@@ -22,10 +22,13 @@ import {
 
 const CONFIG_DIR = path.join(os.homedir(), '.hermes-provider-switcher')
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json')
+const ROUTER_PROVIDER_NAME = 'hermes-switcher'
 
 const DEFAULT_CONFIG: AppConfig = {
   hermes_config_path: '',
   active_provider_id: null,
+  router_port: 15722,
+  auto_start_proxy: true,
   providers: [],
 }
 
@@ -42,11 +45,21 @@ function log(msg: string) {
   console.log(`[${new Date().toISOString()}] ${msg}`)
 }
 
+function normalizeConfig(raw: Partial<AppConfig>): AppConfig {
+  return {
+    ...DEFAULT_CONFIG,
+    ...raw,
+    router_port: raw.router_port || raw.providers?.[0]?.proxy_port || DEFAULT_CONFIG.router_port,
+    auto_start_proxy: raw.auto_start_proxy ?? DEFAULT_CONFIG.auto_start_proxy,
+    providers: raw.providers || [],
+  }
+}
+
 function loadConfig(): AppConfig {
   try {
     if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true })
     if (!fs.existsSync(CONFIG_FILE)) return { ...DEFAULT_CONFIG }
-    return { ...DEFAULT_CONFIG, ...JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) }
+    return normalizeConfig(JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')))
   } catch (e) {
     log(`loadConfig error: ${e}`)
     return { ...DEFAULT_CONFIG }
@@ -56,10 +69,15 @@ function loadConfig(): AppConfig {
 function saveConfig(cfg: AppConfig): void {
   try {
     if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true })
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2), 'utf8')
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(normalizeConfig(cfg), null, 2), 'utf8')
   } catch (e) {
     log(`saveConfig error: ${e}`)
   }
+}
+
+function getActiveProvider(): Provider | null {
+  const cfg = loadConfig()
+  return cfg.providers.find((p) => p.id === cfg.active_provider_id) || cfg.providers[0] || null
 }
 
 function isPortBusy(port: number): Promise<boolean> {
@@ -74,28 +92,116 @@ function isPortBusy(port: number): Promise<boolean> {
   })
 }
 
-async function startProxy(provider: Provider): Promise<ProxyStatus> {
-  if (proxyServer) await stopProxy()
+function sendJson(res: http.ServerResponse, status: number, data: unknown) {
+  res.writeHead(status, { 'Content-Type': 'application/json' })
+  res.end(JSON.stringify(data))
+}
 
-  const port = provider.proxy_port || 15722
-  if (await isPortBusy(port)) {
-    return { running: false, port, provider_id: provider.id, error: `端口 ${port} 已被占用` }
+function stripIncompatibleFields(payload: Record<string, unknown>) {
+  delete payload.tools
+  delete payload.tool_choice
+  delete payload.parallel_tool_calls
+  delete payload.reasoning_effort
+}
+
+async function forwardChatCompletion(provider: Provider, payload: Record<string, unknown>, res: http.ServerResponse) {
+  const origModel = payload.model as string
+  payload.model = provider.model_mapping?.[origModel] ?? origModel
+  if (provider.strip_tools) stripIncompatibleFields(payload)
+
+  const upstreamBase = provider.base_url.replace(/\/$/, '')
+  const upstreamUrl = `${upstreamBase}/chat/completions`
+  const upstreamUrlObj = new URL(upstreamUrl)
+  const isHttps = upstreamUrlObj.protocol === 'https:'
+  const httpModule = isHttps ? await import('https') : await import('http')
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${provider.api_key}`,
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36',
+  }
+  for (const h of provider.custom_headers || []) {
+    if (h.key) headers[h.key] = h.value
   }
 
-  const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+  const bodyStr = JSON.stringify(payload)
+  headers['Content-Length'] = String(Buffer.byteLength(bodyStr))
+  log(`Router -> ${upstreamUrl} provider=${provider.name} model=${payload.model as string} (was ${origModel}) apiKey=${maskKey(provider.api_key)}`)
+
+  const upstreamReq = (httpModule as typeof import('https')).request(
+    {
+      hostname: upstreamUrlObj.hostname,
+      port: upstreamUrlObj.port || (isHttps ? 443 : 80),
+      path: upstreamUrlObj.pathname + upstreamUrlObj.search,
+      method: 'POST',
+      headers,
+    },
+    (upstreamRes) => {
+      res.writeHead(upstreamRes.statusCode || 200, {
+        'Content-Type': upstreamRes.headers['content-type'] || 'application/json',
+      })
+      upstreamRes.pipe(res)
+    },
+  )
+  upstreamReq.on('error', (err) => {
+    log(`Router upstream error: ${err.message}`)
+    if (!res.headersSent) {
+      sendJson(res, 502, { error: { message: err.message, type: 'proxy_error' } })
+    }
+  })
+  upstreamReq.write(bodyStr)
+  upstreamReq.end()
+}
+
+async function startProxy(port?: number): Promise<ProxyStatus> {
+  const cfg = loadConfig()
+  const routerPort = port || cfg.router_port || DEFAULT_CONFIG.router_port
+  const active = getActiveProvider()
+
+  if (proxyServer && proxyStatus.port === routerPort) {
+    proxyStatus = {
+      running: true,
+      port: routerPort,
+      provider_id: active?.id || null,
+      provider_name: active?.name,
+    }
+    return proxyStatus
+  }
+  if (proxyServer) await stopProxy()
+
+  if (await isPortBusy(routerPort)) {
+    proxyStatus = { running: false, port: routerPort, provider_id: active?.id || null, provider_name: active?.name, error: `端口 ${routerPort} 已被占用` }
+    return proxyStatus
+  }
 
   proxyServer = http.createServer((req, res) => {
     const url = req.url || ''
+    const provider = getActiveProvider()
+
+    if (!provider) {
+      sendJson(res, 503, { error: { message: '尚未选择可用供应商', type: 'no_active_provider' } })
+      return
+    }
 
     if (req.method === 'GET' && (url === '/v1/models' || url === '/v1/models/')) {
-      const models = (provider.models || []).map((m) => ({
+      const models = (provider.models.length ? provider.models : [provider.default_model]).filter(Boolean).map((m) => ({
         id: m,
         object: 'model',
         created: Math.floor(Date.now() / 1000),
         owned_by: provider.name,
       }))
-      res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ object: 'list', data: models }))
+      sendJson(res, 200, { object: 'list', data: models })
+      return
+    }
+
+    if (req.method === 'GET' && (url === '/health' || url === '/v1/health')) {
+      sendJson(res, 200, {
+        ok: true,
+        provider: provider.name,
+        model: provider.default_model,
+        port: routerPort,
+      })
       return
     }
 
@@ -104,82 +210,31 @@ async function startProxy(provider: Provider): Promise<ProxyStatus> {
       req.on('data', (chunk) => { body += chunk })
       req.on('end', async () => {
         try {
-          const payload: Record<string, unknown> = JSON.parse(body)
-          const origModel = payload.model as string
-          payload.model = provider.model_mapping?.[origModel] ?? origModel
-
-          if (provider.strip_tools) {
-            delete payload.tools
-            delete payload.tool_choice
-            delete payload.parallel_tool_calls
-            delete payload.reasoning_effort
-          }
-
-          const upstreamBase = provider.base_url.replace(/\/$/, '')
-          const upstreamUrl = `${upstreamBase}/chat/completions`
-          const upstreamUrlObj = new URL(upstreamUrl)
-          const isHttps = upstreamUrlObj.protocol === 'https:'
-          const httpModule = isHttps ? await import('https') : await import('http')
-
-          const headers: Record<string, string> = {
-            Authorization: `Bearer ${provider.api_key}`,
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-            'User-Agent': userAgent,
-          }
-          for (const h of provider.custom_headers || []) {
-            if (h.key) headers[h.key] = h.value
-          }
-
-          const bodyStr = JSON.stringify(payload)
-          headers['Content-Length'] = String(Buffer.byteLength(bodyStr))
-          log(`Proxy -> ${upstreamUrl} model=${payload.model as string} (was ${origModel}) apiKey=${maskKey(provider.api_key)}`)
-
-          const upstreamReq = (httpModule as typeof import('https')).request(
-            {
-              hostname: upstreamUrlObj.hostname,
-              port: upstreamUrlObj.port || (isHttps ? 443 : 80),
-              path: upstreamUrlObj.pathname + upstreamUrlObj.search,
-              method: 'POST',
-              headers,
-            },
-            (upstreamRes) => {
-              res.writeHead(upstreamRes.statusCode || 200, {
-                'Content-Type': upstreamRes.headers['content-type'] || 'application/json',
-              })
-              upstreamRes.pipe(res)
-            },
-          )
-          upstreamReq.on('error', (err) => {
-            log(`Proxy upstream error: ${err.message}`)
-            if (!res.headersSent) {
-              res.writeHead(502, { 'Content-Type': 'application/json' })
-              res.end(JSON.stringify({ error: { message: err.message, type: 'proxy_error' } }))
-            }
-          })
-          upstreamReq.write(bodyStr)
-          upstreamReq.end()
+          await forwardChatCompletion(provider, JSON.parse(body), res)
         } catch (e) {
-          log(`Proxy parse error: ${e}`)
-          res.writeHead(400, { 'Content-Type': 'application/json' })
-          res.end(JSON.stringify({ error: { message: String(e), type: 'parse_error' } }))
+          log(`Router parse error: ${e}`)
+          sendJson(res, 400, { error: { message: String(e), type: 'parse_error' } })
         }
       })
       return
     }
 
-    res.writeHead(404, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: 'Not found' }))
+    sendJson(res, 404, { error: 'Not found' })
   })
 
   return new Promise((resolve) => {
-    proxyServer!.listen(port, '127.0.0.1', () => {
-      proxyStatus = { running: true, port, provider_id: provider.id }
-      log(`Proxy started on 127.0.0.1:${port} for provider "${provider.name}"`)
+    proxyServer!.listen(routerPort, '127.0.0.1', () => {
+      proxyStatus = {
+        running: true,
+        port: routerPort,
+        provider_id: active?.id || null,
+        provider_name: active?.name,
+      }
+      log(`Router started on 127.0.0.1:${routerPort}`)
       resolve(proxyStatus)
     })
     proxyServer!.on('error', (err) => {
-      proxyStatus = { running: false, port, provider_id: provider.id, error: err.message }
+      proxyStatus = { running: false, port: routerPort, provider_id: active?.id || null, provider_name: active?.name, error: err.message }
       resolve(proxyStatus)
     })
   })
@@ -195,7 +250,7 @@ async function stopProxy(): Promise<void> {
     proxyServer.close(() => {
       proxyServer = null
       proxyStatus = { running: false, port: 0, provider_id: null }
-      log('Proxy stopped')
+      log('Router stopped')
       resolve()
     })
   })
@@ -214,6 +269,8 @@ function applyProviderToHermes(configPath: string, provider: Provider): ApplyRes
       return { success: false, message: `找不到配置文件：${configPath}` }
     }
 
+    const cfg = loadConfig()
+    const routerPort = cfg.router_port || provider.proxy_port || DEFAULT_CONFIG.router_port
     const backupPath = backupHermesConfig(configPath)
     const raw = fs.readFileSync(configPath, 'utf8')
     let doc: Record<string, any>
@@ -223,45 +280,43 @@ function applyProviderToHermes(configPath: string, provider: Provider): ApplyRes
       doc = {}
     }
 
-    const effectiveBaseUrl = provider.enable_local_proxy
-      ? `http://127.0.0.1:${provider.proxy_port}/v1`
-      : provider.base_url
-    const effectiveModel = provider.default_model
+    const baseUrl = `http://127.0.0.1:${routerPort}/v1`
+    const model = provider.default_model || provider.models[0] || 'gpt-4o'
 
     doc.model = {
-      provider: provider.name,
-      default: effectiveModel,
-      base_url: effectiveBaseUrl,
+      provider: ROUTER_PROVIDER_NAME,
+      default: model,
+      base_url: baseUrl,
       api_mode: provider.api_mode || 'chat_completions',
     }
 
     const modelsMap: Record<string, { name: string }> = {}
-    for (const m of provider.models || []) modelsMap[m] = { name: m }
-    if (effectiveModel && !modelsMap[effectiveModel]) modelsMap[effectiveModel] = { name: effectiveModel }
+    const hermesModels = Array.from(new Set([model, ...(provider.models || [])])).filter(Boolean)
+    for (const m of hermesModels) modelsMap[m] = { name: m }
 
     let existingProviders: any[] = []
     if (Array.isArray(doc.custom_providers)) {
-      existingProviders = doc.custom_providers.filter((p: any) => p?.name !== provider.name)
+      existingProviders = doc.custom_providers.filter((p: any) => p?.name !== ROUTER_PROVIDER_NAME)
     }
 
     doc.custom_providers = [
       ...existingProviders,
       {
-        name: provider.name,
-        base_url: effectiveBaseUrl,
-        api_key: provider.api_key,
+        name: ROUTER_PROVIDER_NAME,
+        base_url: baseUrl,
+        api_key: 'local-router',
         api_mode: provider.api_mode || 'chat_completions',
-        model: effectiveModel,
+        model,
         models: modelsMap,
       },
     ]
 
     fs.writeFileSync(configPath, yaml.dump(doc, { indent: 2, lineWidth: -1, noRefs: true }), 'utf8')
-    log(`Applied provider "${provider.name}" to Hermes config. backup=${backupPath}`)
+    log(`Applied router config to Hermes. backup=${backupPath}`)
 
     return {
       success: true,
-      message: `已成功写入 Hermes 配置，请重启 Hermes Agent 使其生效。备份：${path.basename(backupPath)}`,
+      message: `已把 Hermes 固定指向本地路由器 ${baseUrl}。以后切换供应商只需要在本软件里选择并启动路由器。备份：${path.basename(backupPath)}`,
       backup_path: backupPath,
     }
   } catch (e) {
@@ -318,10 +373,10 @@ async function fetchModels(provider: Provider): Promise<TestConnectionResult> {
 function createWindow() {
   const appPath = app.getAppPath()
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    minWidth: 900,
-    minHeight: 600,
+    width: 1220,
+    height: 820,
+    minWidth: 940,
+    minHeight: 620,
     title: 'Hermes Provider Switcher',
     backgroundColor: '#0f172a',
     webPreferences: {
@@ -342,7 +397,12 @@ function createWindow() {
 function registerIPC() {
   ipcMain.handle(IPC.GET_CONFIG, () => loadConfig())
   ipcMain.handle(IPC.SAVE_CONFIG, (_e, cfg: AppConfig) => {
-    saveConfig(cfg)
+    const next = normalizeConfig(cfg)
+    saveConfig(next)
+    const active = next.providers.find((p) => p.id === next.active_provider_id) || null
+    if (proxyStatus.running) {
+      proxyStatus = { ...proxyStatus, provider_id: active?.id || null, provider_name: active?.name }
+    }
     return true
   })
   ipcMain.handle(IPC.SELECT_HERMES_CONFIG, async () => {
@@ -357,18 +417,31 @@ function registerIPC() {
   ipcMain.handle(IPC.TEST_CONNECTION, async (_e, provider: Provider) => testConnection(provider))
   ipcMain.handle(IPC.FETCH_MODELS, async (_e, provider: Provider) => fetchModels(provider))
   ipcMain.handle(IPC.APPLY_PROVIDER, (_e, configPath: string, provider: Provider) => applyProviderToHermes(configPath, provider))
-  ipcMain.handle(IPC.START_PROXY, async (_e, provider: Provider) => startProxy(provider))
+  ipcMain.handle(IPC.START_PROXY, async (_e, providerOrPort?: Provider | number) => {
+    const port = typeof providerOrPort === 'number' ? providerOrPort : undefined
+    return startProxy(port)
+  })
   ipcMain.handle(IPC.STOP_PROXY, async () => {
     await stopProxy()
     return proxyStatus
   })
-  ipcMain.handle(IPC.GET_PROXY_STATUS, () => proxyStatus)
+  ipcMain.handle(IPC.GET_PROXY_STATUS, () => {
+    const active = getActiveProvider()
+    if (proxyStatus.running) {
+      proxyStatus = { ...proxyStatus, provider_id: active?.id || null, provider_name: active?.name }
+    }
+    return proxyStatus
+  })
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
   registerIPC()
   createWindow()
+  const cfg = loadConfig()
+  if (cfg.auto_start_proxy && cfg.providers.length) {
+    await startProxy(cfg.router_port)
+  }
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })

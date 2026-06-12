@@ -37,6 +37,34 @@ button, input, textarea, select { font: inherit; }
   background: #162238;
   overflow: auto;
 }
+.routerCard {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 11px;
+  margin-bottom: 12px;
+  border: 1px solid #3b4c67;
+  border-radius: 8px;
+  background: #111c2f;
+}
+.routerCard.ok { border-color: #22c55e; }
+.routerCard strong { font-size: 13px; color: #f8fafc; }
+.routerCard span {
+  font-family: Consolas, monospace;
+  font-size: 11px;
+  color: #93c5fd;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.routerCard small { color: #94a3b8; }
+.sideLabel { margin-bottom: 10px; }
+.checkLine {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+.checkLine input { width: auto; }
 .providerList { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
 .providerItem {
   width: 100%;

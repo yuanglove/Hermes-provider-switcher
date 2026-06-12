@@ -25,6 +25,8 @@ export interface Provider {
 export interface AppConfig {
   hermes_config_path: string
   active_provider_id: string | null
+  router_port: number
+  auto_start_proxy: boolean
   providers: Provider[]
 }
 
@@ -32,6 +34,7 @@ export interface ProxyStatus {
   running: boolean
   port: number
   provider_id: string | null
+  provider_name?: string
   error?: string
 }
 

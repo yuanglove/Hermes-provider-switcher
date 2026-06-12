@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { AppConfig, Provider, ProxyStatus } from '../shared/types'
+
+const DEFAULT_PORT = 15722
 
 const emptyProvider = (): Provider => ({
   id: Math.random().toString(36).slice(2, 10),
@@ -10,11 +12,19 @@ const emptyProvider = (): Provider => ({
   default_model: '',
   models: [],
   enable_local_proxy: true,
-  proxy_port: 15722,
+  proxy_port: DEFAULT_PORT,
   strip_tools: true,
   custom_headers: [],
   model_mapping: {},
 })
+
+const emptyConfig: AppConfig = {
+  hermes_config_path: '',
+  active_provider_id: null,
+  router_port: DEFAULT_PORT,
+  auto_start_proxy: true,
+  providers: [],
+}
 
 function splitLines(value: string): string[] {
   return value.split('\n').map((line) => line.trim()).filter(Boolean)
@@ -35,8 +45,16 @@ function parseKeyValueLines(value: string): Record<string, string> {
   return result
 }
 
+function providerToDraftText(provider?: Provider | null) {
+  return {
+    modelsText: joinLines(provider?.models || []),
+    mappingText: Object.entries(provider?.model_mapping || {}).map(([k, v]) => `${k}=${v}`).join('\n'),
+    headersText: (provider?.custom_headers || []).map((h) => `${h.key}=${h.value}`).join('\n'),
+  }
+}
+
 export default function App() {
-  const [config, setConfig] = useState<AppConfig>({ hermes_config_path: '', active_provider_id: null, providers: [] })
+  const [config, setConfig] = useState<AppConfig>(emptyConfig)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [draft, setDraft] = useState<Provider | null>(null)
   const [modelsText, setModelsText] = useState('')
@@ -48,43 +66,66 @@ export default function App() {
 
   useEffect(() => {
     window.electronAPI.getConfig().then((cfg) => {
-      setConfig(cfg)
-      const id = cfg.active_provider_id || cfg.providers[0]?.id || null
-      if (id) selectProvider(id, cfg)
+      const next = { ...emptyConfig, ...cfg }
+      setConfig(next)
+      const id = next.active_provider_id || next.providers[0]?.id || null
+      if (id) selectProvider(id, next)
     })
-    window.electronAPI.getProxyStatus().then(setProxyStatus)
+    refreshProxyStatus()
   }, [])
 
-  const selectedProvider = useMemo(
-    () => config.providers.find((p) => p.id === selectedId) || null,
-    [config.providers, selectedId],
+  const activeProvider = useMemo(
+    () => config.providers.find((p) => p.id === config.active_provider_id) || null,
+    [config.providers, config.active_provider_id],
   )
 
-  const saveConfig = useCallback((next: AppConfig) => {
-    setConfig(next)
-    window.electronAPI.saveConfig(next)
-  }, [])
+  function saveConfig(next: AppConfig) {
+    const normalized = { ...emptyConfig, ...next }
+    setConfig(normalized)
+    window.electronAPI.saveConfig(normalized)
+  }
 
   function selectProvider(id: string, source = config) {
     const found = source.providers.find((p) => p.id === id)
     setSelectedId(id)
     setDraft(found ? { ...found } : null)
-    setModelsText(joinLines(found?.models || []))
-    setMappingText(Object.entries(found?.model_mapping || {}).map(([k, v]) => `${k}=${v}`).join('\n'))
-    setHeadersText((found?.custom_headers || []).map((h) => `${h.key}=${h.value}`).join('\n'))
+    const text = providerToDraftText(found)
+    setModelsText(text.modelsText)
+    setMappingText(text.mappingText)
+    setHeadersText(text.headersText)
   }
 
-  function persistProvider(next: Provider) {
+  function syncTextFields(provider: Provider): Provider {
+    const custom_headers = Object.entries(parseKeyValueLines(headersText)).map(([key, value]) => ({ key, value }))
+    return {
+      ...provider,
+      models: splitLines(modelsText),
+      model_mapping: parseKeyValueLines(mappingText),
+      custom_headers,
+      proxy_port: config.router_port,
+      enable_local_proxy: true,
+    }
+  }
+
+  function persistProvider(next: Provider, makeActive = false) {
     setDraft(next)
     const providers = config.providers.map((p) => (p.id === next.id ? next : p))
-    saveConfig({ ...config, providers })
+    saveConfig({
+      ...config,
+      providers,
+      active_provider_id: makeActive ? next.id : config.active_provider_id,
+    })
   }
 
   function createProvider() {
-    const p = emptyProvider()
-    const next = { ...config, providers: [...config.providers, p] }
+    const provider = emptyProvider()
+    const next = {
+      ...config,
+      active_provider_id: config.active_provider_id || provider.id,
+      providers: [...config.providers, provider],
+    }
     saveConfig(next)
-    selectProvider(p.id, next)
+    selectProvider(provider.id, next)
   }
 
   function removeProvider(id: string) {
@@ -99,19 +140,22 @@ export default function App() {
     }
   }
 
-  function syncTextFields(provider: Provider): Provider {
-    const custom_headers = Object.entries(parseKeyValueLines(headersText)).map(([key, value]) => ({ key, value }))
-    return {
-      ...provider,
-      models: splitLines(modelsText),
-      model_mapping: parseKeyValueLines(mappingText),
-      custom_headers,
-    }
-  }
-
   async function chooseHermesConfig() {
     const path = await window.electronAPI.selectHermesConfig()
     if (path) saveConfig({ ...config, hermes_config_path: path })
+  }
+
+  async function refreshProxyStatus() {
+    const status = await window.electronAPI.getProxyStatus()
+    setProxyStatus(status)
+  }
+
+  async function activateProvider() {
+    if (!draft) return
+    const provider = syncTextFields(draft)
+    persistProvider(provider, true)
+    setMessage(`已切换到供应商：${provider.name}`)
+    setTimeout(refreshProxyStatus, 200)
   }
 
   async function testConnection() {
@@ -151,32 +195,29 @@ export default function App() {
     }
   }
 
-  async function startProxy() {
-    if (!draft) return
+  async function startRouter() {
     setBusy(true)
     try {
-      const provider = syncTextFields(draft)
-      persistProvider(provider)
-      const status = await window.electronAPI.startProxy(provider)
+      const status = await window.electronAPI.startProxy({ ...(draft || emptyProvider()), proxy_port: config.router_port })
       setProxyStatus(status)
-      setMessage(status.running ? `本地代理已启动：127.0.0.1:${status.port}` : status.error || '代理启动失败')
+      setMessage(status.running ? `本地路由器已启动：127.0.0.1:${status.port}` : status.error || '本地路由器启动失败')
     } finally {
       setBusy(false)
     }
   }
 
-  async function stopProxy() {
+  async function stopRouter() {
     setBusy(true)
     try {
       const status = await window.electronAPI.stopProxy()
       setProxyStatus(status)
-      setMessage('本地代理已停止')
+      setMessage('本地路由器已停止')
     } finally {
       setBusy(false)
     }
   }
 
-  async function applyToHermes() {
+  async function applyRouterToHermes() {
     if (!draft) return
     if (!config.hermes_config_path) {
       setMessage('请先选择 Hermes 的 config.yaml')
@@ -185,29 +226,27 @@ export default function App() {
     setBusy(true)
     try {
       const provider = syncTextFields(draft)
-      persistProvider(provider)
+      persistProvider(provider, true)
       const result = await window.electronAPI.applyProvider(config.hermes_config_path, provider)
-      if (result.success) {
-        saveConfig({
-          ...config,
-          active_provider_id: provider.id,
-          providers: config.providers.map((p) => (p.id === provider.id ? provider : p)),
-        })
-      }
       setMessage(result.message)
+      if (result.success && !proxyStatus.running) {
+        const status = await window.electronAPI.startProxy({ ...provider, proxy_port: config.router_port })
+        setProxyStatus(status)
+      }
     } finally {
       setBusy(false)
     }
   }
 
-  const proxyForSelected = draft && proxyStatus.running && proxyStatus.provider_id === draft.id
+  const routerBaseUrl = `http://127.0.0.1:${config.router_port || DEFAULT_PORT}/v1`
+  const selectedIsActive = !!draft && config.active_provider_id === draft.id
 
   return (
     <div className="app">
       <header className="topbar">
         <div>
-          <h1>Hermes 供应商切换器</h1>
-          <p>管理第三方 API，写入 Hermes 配置，并可通过本地代理做模型映射和请求清洗。</p>
+          <h1>Hermes API Router</h1>
+          <p>Hermes 固定连接本地路由器；你在这里切换供应商，下一次请求立即走新的 API。</p>
         </div>
         <div className="pathBox">
           <span>{config.hermes_config_path || '尚未选择 Hermes config.yaml'}</span>
@@ -217,6 +256,29 @@ export default function App() {
 
       <main className="layout">
         <aside className="sidebar">
+          <div className={`routerCard ${proxyStatus.running ? 'ok' : ''}`}>
+            <strong>{proxyStatus.running ? '路由器运行中' : '路由器未启动'}</strong>
+            <span>{routerBaseUrl}</span>
+            <small>当前：{activeProvider?.name || '未选择供应商'}</small>
+          </div>
+
+          <label className="sideLabel">
+            路由端口
+            <input
+              type="number"
+              value={config.router_port}
+              onChange={(e) => saveConfig({ ...config, router_port: Number(e.target.value) || DEFAULT_PORT })}
+            />
+          </label>
+          <label className="checkLine">
+            <input
+              type="checkbox"
+              checked={config.auto_start_proxy}
+              onChange={(e) => saveConfig({ ...config, auto_start_proxy: e.target.checked })}
+            />
+            软件启动时自动启动路由器
+          </label>
+
           <button className="btn primary full" onClick={createProvider}>新建供应商</button>
           <div className="providerList">
             {config.providers.map((p) => (
@@ -235,9 +297,8 @@ export default function App() {
               <div>
                 <h2>{draft.name || '未命名供应商'}</h2>
                 <p>
-                  {config.active_provider_id === draft.id ? '当前已应用到 Hermes' : '未应用'}
-                  {proxyForSelected ? ` · 代理运行中：${proxyStatus.port}` : ''}
-                  {selectedProvider ? '' : ''}
+                  {selectedIsActive ? '当前激活供应商' : '未激活'}
+                  {proxyStatus.running ? ` · 路由器端口：${proxyStatus.port}` : ''}
                 </p>
               </div>
               <button className="btn danger" onClick={() => removeProvider(draft.id)}>删除供应商</button>
@@ -246,30 +307,33 @@ export default function App() {
             <div className="grid">
               <label>
                 供应商名称
-                <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} onBlur={() => persistProvider(draft)} placeholder="例如 moyyu" />
+                <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} onBlur={() => persistProvider(syncTextFields(draft))} placeholder="例如 DeepSeek" />
               </label>
               <label>
                 API 模式
-                <select value={draft.api_mode} onChange={(e) => { const d = { ...draft, api_mode: e.target.value as Provider['api_mode'] }; setDraft(d); persistProvider(d) }}>
+                <select value={draft.api_mode} onChange={(e) => { const d = { ...draft, api_mode: e.target.value as Provider['api_mode'] }; setDraft(d); persistProvider(syncTextFields(d)) }}>
                   <option value="chat_completions">chat_completions</option>
                   <option value="responses">responses</option>
                 </select>
               </label>
               <label className="wide">
                 Base URL
-                <input value={draft.base_url} onChange={(e) => setDraft({ ...draft, base_url: e.target.value })} onBlur={() => persistProvider(draft)} placeholder="https://api.example.com/v1" />
+                <input value={draft.base_url} onChange={(e) => setDraft({ ...draft, base_url: e.target.value })} onBlur={() => persistProvider(syncTextFields(draft))} placeholder="https://api.example.com/v1" />
               </label>
               <label className="wide">
                 API Key
-                <input type="password" value={draft.api_key} onChange={(e) => setDraft({ ...draft, api_key: e.target.value })} onBlur={() => persistProvider(draft)} placeholder="sk-..." />
+                <input type="password" value={draft.api_key} onChange={(e) => setDraft({ ...draft, api_key: e.target.value })} onBlur={() => persistProvider(syncTextFields(draft))} placeholder="填入你的 API Key" />
               </label>
               <label>
                 默认模型
-                <input value={draft.default_model} onChange={(e) => setDraft({ ...draft, default_model: e.target.value })} onBlur={() => persistProvider(draft)} placeholder="gpt-4o" />
+                <input value={draft.default_model} onChange={(e) => setDraft({ ...draft, default_model: e.target.value })} onBlur={() => persistProvider(syncTextFields(draft))} placeholder="deepseek-chat" />
               </label>
               <label>
-                代理端口
-                <input type="number" value={draft.proxy_port} onChange={(e) => { const d = { ...draft, proxy_port: Number(e.target.value) }; setDraft(d); persistProvider(d) }} />
+                字段清洗
+                <select value={draft.strip_tools ? 'on' : 'off'} onChange={(e) => { const d = { ...draft, strip_tools: e.target.value === 'on' }; setDraft(d); persistProvider(syncTextFields(d)) }}>
+                  <option value="on">删除 tools/tool_choice 等字段</option>
+                  <option value="off">保持原始请求</option>
+                </select>
               </label>
               <label className="wide">
                 模型列表（每行一个）
@@ -277,7 +341,7 @@ export default function App() {
               </label>
               <label className="wide">
                 模型映射（每行 Hermes模型=上游模型）
-                <textarea value={mappingText} onChange={(e) => setMappingText(e.target.value)} onBlur={() => persistProvider(syncTextFields(draft))} placeholder="gpt-4o=claude-3-5-sonnet" />
+                <textarea value={mappingText} onChange={(e) => setMappingText(e.target.value)} onBlur={() => persistProvider(syncTextFields(draft))} placeholder="gpt-4o=deepseek-chat" />
               </label>
               <label className="wide">
                 自定义请求头（每行 Key=Value）
@@ -285,18 +349,14 @@ export default function App() {
               </label>
             </div>
 
-            <div className="switchRow">
-              <label><input type="checkbox" checked={draft.enable_local_proxy} onChange={(e) => { const d = { ...draft, enable_local_proxy: e.target.checked }; setDraft(d); persistProvider(d) }} /> 启用本地代理</label>
-              <label><input type="checkbox" checked={draft.strip_tools} onChange={(e) => { const d = { ...draft, strip_tools: e.target.checked }; setDraft(d); persistProvider(d) }} /> 删除 tools/tool_choice 等字段</label>
-            </div>
-
             <div className="actions">
               <button className="btn" onClick={testConnection} disabled={busy || !draft.base_url}>测试连接</button>
               <button className="btn" onClick={fetchModels} disabled={busy || !draft.base_url}>拉取模型</button>
-              {!proxyForSelected
-                ? <button className="btn" onClick={startProxy} disabled={busy || !draft.enable_local_proxy}>启动代理</button>
-                : <button className="btn danger" onClick={stopProxy} disabled={busy}>停止代理</button>}
-              <button className="btn primary" onClick={applyToHermes} disabled={busy || !draft.name || !draft.base_url}>应用到 Hermes</button>
+              <button className="btn" onClick={activateProvider} disabled={busy || !draft.name}>设为当前供应商</button>
+              {!proxyStatus.running
+                ? <button className="btn" onClick={startRouter} disabled={busy}>启动路由器</button>
+                : <button className="btn danger" onClick={stopRouter} disabled={busy}>停止路由器</button>}
+              <button className="btn primary" onClick={applyRouterToHermes} disabled={busy || !draft.name || !draft.base_url}>初始化 Hermes 路由</button>
             </div>
 
             {message && <div className="message">{message}</div>}
