@@ -65,6 +65,8 @@ API Key
 7. 重启 Hermes Agent。
 
 之后切换供应商时，只需要在本软件中选择供应商并点击“设为当前供应商”。
+<img width="1807" height="1228" alt="image" src="https://github.com/user-attachments/assets/1859fb31-275c-4a4b-ac8b-30780684863d" />
+
 
 
 
