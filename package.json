@@ -15,7 +15,8 @@
     "dist": "npm run build && electron-builder --win --publish never"
   },
   "dependencies": {
-    "js-yaml": "^4.1.0"
+    "js-yaml": "^4.1.0",
+    "lucide-react": "^1.26.0"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",

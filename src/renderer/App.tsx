@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Activity, ChevronRight, CircleCheck, CirclePlus, CloudCog, Code2, FolderOpen, Link2, LoaderCircle, Play, PlugZap, Power, RefreshCw, Route, Save, ServerCog, Settings2, ShieldCheck, Trash2, Wifi, Zap } from 'lucide-react'
 import { AppConfig, Provider, ProxyStatus } from '../shared/types'
 
 const DEFAULT_PORT = 15722
@@ -81,10 +82,9 @@ export default function App() {
   }, [])
 
   const activeProvider = useMemo(
-    () => config.providers.find((p) => p.id === config.active_provider_id) || null,
+    () => config.providers.find((provider) => provider.id === config.active_provider_id) || null,
     [config.providers, config.active_provider_id],
   )
-
   const routerBaseUrl = `http://127.0.0.1:${config.router_port || DEFAULT_PORT}/v1`
   const selectedIsActive = !!draft && config.active_provider_id === draft.id
 
@@ -95,7 +95,7 @@ export default function App() {
   }
 
   function selectProvider(id: string, source = config) {
-    const found = source.providers.find((p) => p.id === id)
+    const found = source.providers.find((provider) => provider.id === id)
     setSelectedId(id)
     setDraft(found ? { ...found } : null)
     const text = providerToDraftText(found)
@@ -105,12 +105,11 @@ export default function App() {
   }
 
   function syncTextFields(provider: Provider): Provider {
-    const custom_headers = Object.entries(parseKeyValueLines(headersText)).map(([key, value]) => ({ key, value }))
     return {
       ...provider,
       models: splitLines(modelsText),
       model_mapping: parseKeyValueLines(mappingText),
-      custom_headers,
+      custom_headers: Object.entries(parseKeyValueLines(headersText)).map(([key, value]) => ({ key, value })),
       proxy_port: config.router_port,
       enable_local_proxy: true,
     }
@@ -118,12 +117,8 @@ export default function App() {
 
   function persistProvider(next: Provider, makeActive = false) {
     setDraft(next)
-    const providers = config.providers.map((p) => (p.id === next.id ? next : p))
-    saveConfig({
-      ...config,
-      providers,
-      active_provider_id: makeActive ? next.id : config.active_provider_id,
-    })
+    const providers = config.providers.map((provider) => (provider.id === next.id ? next : provider))
+    saveConfig({ ...config, providers, active_provider_id: makeActive ? next.id : config.active_provider_id })
   }
 
   function createProvider(preset?: Partial<Provider>) {
@@ -135,10 +130,11 @@ export default function App() {
     }
     saveConfig(next)
     selectProvider(provider.id, next)
+    setMessage('已创建供应商，请补全连接信息。')
   }
 
   function removeProvider(id: string) {
-    const providers = config.providers.filter((p) => p.id !== id)
+    const providers = config.providers.filter((provider) => provider.id !== id)
     const active = config.active_provider_id === id ? providers[0]?.id || null : config.active_provider_id
     const next = { ...config, providers, active_provider_id: active }
     saveConfig(next)
@@ -155,8 +151,7 @@ export default function App() {
   }
 
   async function refreshProxyStatus() {
-    const status = await window.electronAPI.getProxyStatus()
-    setProxyStatus(status)
+    setProxyStatus(await window.electronAPI.getProxyStatus())
   }
 
   async function activateProvider() {
@@ -175,9 +170,9 @@ export default function App() {
       persistProvider(provider)
       const result = await window.electronAPI.testConnection(provider)
       if (result.models?.length) {
-        const nextModels = Array.from(new Set([...(provider.models || []), ...result.models]))
-        const next = { ...provider, models: nextModels, default_model: provider.default_model || nextModels[0] || '' }
-        setModelsText(joinLines(nextModels))
+        const models = Array.from(new Set([...(provider.models || []), ...result.models]))
+        const next = { ...provider, models, default_model: provider.default_model || models[0] || '' }
+        setModelsText(joinLines(models))
         persistProvider(next)
       }
       setMessage(result.message)
@@ -193,9 +188,9 @@ export default function App() {
       const provider = syncTextFields(draft)
       const result = await window.electronAPI.fetchModels(provider)
       if (result.success && result.models?.length) {
-        const nextModels = Array.from(new Set([...(provider.models || []), ...result.models]))
-        const next = { ...provider, models: nextModels, default_model: provider.default_model || nextModels[0] || '' }
-        setModelsText(joinLines(nextModels))
+        const models = Array.from(new Set([...(provider.models || []), ...result.models]))
+        const next = { ...provider, models, default_model: provider.default_model || models[0] || '' }
+        setModelsText(joinLines(models))
         persistProvider(next)
       }
       setMessage(result.message)
@@ -218,9 +213,8 @@ export default function App() {
   async function stopRouter() {
     setBusy(true)
     try {
-      const status = await window.electronAPI.stopProxy()
-      setProxyStatus(status)
-      setMessage('本地路由器已停止')
+      setProxyStatus(await window.electronAPI.stopProxy())
+      setMessage('本地路由器已停止。')
     } finally {
       setBusy(false)
     }
@@ -229,7 +223,7 @@ export default function App() {
   async function applyRouterToHermes() {
     if (!draft) return
     if (!config.hermes_config_path) {
-      setMessage('请先选择 Hermes 的 config.yaml')
+      setMessage('请先选择 Hermes 的 config.yaml 文件。')
       return
     }
     setBusy(true)
@@ -238,164 +232,122 @@ export default function App() {
       persistProvider(provider, true)
       const result = await window.electronAPI.applyProvider(config.hermes_config_path, provider)
       setMessage(result.message)
-      if (result.success && !proxyStatus.running) {
-        const status = await window.electronAPI.startProxy({ ...provider, proxy_port: config.router_port })
-        setProxyStatus(status)
-      }
+      if (result.success && !proxyStatus.running) setProxyStatus(await window.electronAPI.startProxy({ ...provider, proxy_port: config.router_port }))
     } finally {
       setBusy(false)
     }
   }
 
+  const routerState = proxyStatus.running ? '运行中' : '未启动'
+
   return (
-    <div className="app">
-      <header className="topbar">
-        <div className="brand">
-          <span className="brandMark">H</span>
-          <div>
-            <h1>Hermes API Router</h1>
-            <p>接入第三方 API 代理 Hermes</p>
+    <div className="workspace">
+      <aside className="appRail">
+        <div className="appLogo"><Route size={22} strokeWidth={2.4} /></div>
+        <div className="railGroup">
+          <button className="railButton active" title="供应商工作台"><CloudCog size={19} /></button>
+          <button className="railButton" title="路由设置"><Settings2 size={19} /></button>
+        </div>
+        <div className="railBottom"><button className="railButton" title="帮助"><Code2 size={19} /></button></div>
+      </aside>
+
+      <aside className="providerSidebar">
+        <div className="sidebarHead">
+          <div><span className="eyebrow">HERMES</span><h1>API 路由中心</h1></div>
+          <button className="iconButton" onClick={() => createProvider()} title="新建供应商"><CirclePlus size={20} /></button>
+        </div>
+
+        <div className="routerMiniCard">
+          <div className="miniCardTop"><span className={proxyStatus.running ? 'liveDot' : 'idleDot'} /><span>本地路由</span><strong>{routerState}</strong></div>
+          <code>{routerBaseUrl}</code>
+          <button className="miniAction" onClick={proxyStatus.running ? stopRouter : startRouter} disabled={busy}>
+            {proxyStatus.running ? <Power size={15} /> : <Play size={15} />}{proxyStatus.running ? '停止路由' : '启动路由'}
+          </button>
+        </div>
+
+        <div className="providerSectionHead"><span>供应商</span><span>{config.providers.length}</span></div>
+        <div className="providerList">
+          {config.providers.map((provider) => (
+            <button key={provider.id} className={`providerRow ${provider.id === selectedId ? 'selected' : ''}`} onClick={() => selectProvider(provider.id)}>
+              <span className={provider.id === config.active_provider_id ? 'providerState online' : 'providerState'} />
+              <span className="providerRowText"><strong>{provider.name || '未命名供应商'}</strong><small>{provider.default_model || '尚未设置模型'}</small></span>
+              <ChevronRight size={15} />
+            </button>
+          ))}
+        </div>
+
+        <div className="sidebarFoot"><button className="newProviderButton" onClick={() => createProvider()}><CirclePlus size={17} />新建供应商</button></div>
+      </aside>
+
+      <main className="consoleMain">
+        <header className="consoleHeader">
+          <div className="breadcrumb"><span>供应商工作台</span><ChevronRight size={14} /><strong>{draft?.name || '新建连接'}</strong></div>
+          <div className="headerActions">
+            <button className="textButton" onClick={chooseHermesConfig}><FolderOpen size={16} />{config.hermes_config_path ? '已选择 Hermes 配置' : '选择 Hermes 配置'}</button>
+            <button className="button secondary" onClick={refreshProxyStatus}><RefreshCw size={16} />刷新状态</button>
+            <button className="button primary" onClick={applyRouterToHermes} disabled={busy || !draft?.name || !draft.base_url}><Zap size={16} />连接 Hermes</button>
           </div>
-        </div>
-        <div className="configPicker">
-          <span>{config.hermes_config_path || '尚未选择 Hermes config.yaml'}</span>
-          <button className="btn secondary" onClick={chooseHermesConfig}>选择配置</button>
-        </div>
-      </header>
+        </header>
 
-      <div className="statusBar">
-        <div className={`statusPill ${proxyStatus.running ? 'ok' : 'warn'}`}>
-          <span className="statusDot" />
-          {proxyStatus.running ? '路由器运行中' : '路由器未启动'}
-        </div>
-        <div className="statusText">地址：{routerBaseUrl}</div>
-        <div className="statusText">当前供应商：{activeProvider?.name || '未选择'}</div>
-        <div className="statusActions">
-          {!proxyStatus.running
-            ? <button className="btn compact" onClick={startRouter} disabled={busy}>启动</button>
-            : <button className="btn compact danger" onClick={stopRouter} disabled={busy}>停止</button>}
-          <button className="btn compact" onClick={refreshProxyStatus}>刷新</button>
-        </div>
-      </div>
-
-      <main className="layout">
-        <aside className="sidebar">
-          <section className="sideSection">
-            <div className="sectionTitle">路由设置</div>
-            <label className="field">
-              <span>端口</span>
-              <input
-                type="number"
-                value={config.router_port}
-                onChange={(e) => saveConfig({ ...config, router_port: Number(e.target.value) || DEFAULT_PORT })}
-              />
-            </label>
-            <label className="checkLine">
-              <input
-                type="checkbox"
-                checked={config.auto_start_proxy}
-                onChange={(e) => saveConfig({ ...config, auto_start_proxy: e.target.checked })}
-              />
-              自动启动路由器
-            </label>
-          </section>
-
-          <section className="sideSection">
-            <div className="sectionTitle">供应商</div>
-            <button className="btn primary full" onClick={() => createProvider()}>新建供应商</button>
-            <div className="providerList">
-              {config.providers.map((p) => (
-                <button key={p.id} className={`providerItem ${p.id === selectedId ? 'selected' : ''}`} onClick={() => selectProvider(p.id)}>
-                  <span className={`dot ${config.active_provider_id === p.id ? 'active' : ''}`} />
-                  <span className="providerName">{p.name || '未命名'}</span>
-                  <span className="providerModel">{p.default_model || '未设置模型'}</span>
-                </button>
-              ))}
+        {!draft ? (
+          <section className="emptyWorkspace">
+            <div className="emptyGlyph"><PlugZap size={34} /></div>
+            <span className="eyebrow">开始配置</span>
+            <h2>创建你的第一个 API 连接</h2>
+            <p>添加供应商后，Hermes 会稳定连接本地路由地址；以后只需在此处切换上游模型。</p>
+            <div className="templateCards">
+              {providerPresets.map((preset) => <button key={preset.name} className="templateCard" onClick={() => createProvider(preset)}><CloudCog size={19} /><strong>{preset.name}</strong><span>{preset.default_model}</span></button>)}
             </div>
-          </section>
-        </aside>
-
-        {draft ? (
-          <section className="panel">
-            <div className="panelHeader">
-              <div>
-                <h2>{draft.name || '未命名供应商'}</h2>
-                <p>{selectedIsActive ? '当前激活供应商，Hermes 请求会转发到这里。' : '配置完成后设为当前供应商即可接管下一次请求。'}</p>
-              </div>
-              <button className="btn danger" onClick={() => removeProvider(draft.id)}>删除</button>
-            </div>
-
-            <div className="formShell">
-              <div className="grid">
-                <label className="field">
-                  <span>供应商名称</span>
-                  <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} onBlur={() => persistProvider(syncTextFields(draft))} placeholder="例如 DeepSeek" />
-                </label>
-                <label className="field">
-                  <span>API 模式</span>
-                  <select value={draft.api_mode} onChange={(e) => { const d = { ...draft, api_mode: e.target.value as Provider['api_mode'] }; setDraft(d); persistProvider(syncTextFields(d)) }}>
-                    <option value="chat_completions">chat_completions</option>
-                    <option value="responses">responses</option>
-                  </select>
-                </label>
-                <label className="field wide">
-                  <span>Base URL</span>
-                  <input value={draft.base_url} onChange={(e) => setDraft({ ...draft, base_url: e.target.value })} onBlur={() => persistProvider(syncTextFields(draft))} placeholder="https://api.example.com/v1" />
-                </label>
-                <label className="field wide">
-                  <span>API Key</span>
-                  <input type="password" value={draft.api_key} onChange={(e) => setDraft({ ...draft, api_key: e.target.value })} onBlur={() => persistProvider(syncTextFields(draft))} placeholder="填入你的 API Key" />
-                </label>
-                <label className="field">
-                  <span>默认模型</span>
-                  <input value={draft.default_model} onChange={(e) => setDraft({ ...draft, default_model: e.target.value })} onBlur={() => persistProvider(syncTextFields(draft))} placeholder="deepseek-chat" />
-                </label>
-                <label className="field">
-                  <span>字段清洗</span>
-                  <select value={draft.strip_tools ? 'on' : 'off'} onChange={(e) => { const d = { ...draft, strip_tools: e.target.value === 'on' }; setDraft(d); persistProvider(syncTextFields(d)) }}>
-                    <option value="on">删除 tools/tool_choice 等字段</option>
-                    <option value="off">保持原始请求</option>
-                  </select>
-                </label>
-                <label className="field wide">
-                  <span>模型列表（每行一个）</span>
-                  <textarea value={modelsText} onChange={(e) => setModelsText(e.target.value)} onBlur={() => persistProvider(syncTextFields(draft))} placeholder={'gpt-4o\ngpt-4o-mini'} />
-                </label>
-                <label className="field wide">
-                  <span>模型映射（每行 Hermes模型=上游模型）</span>
-                  <textarea value={mappingText} onChange={(e) => setMappingText(e.target.value)} onBlur={() => persistProvider(syncTextFields(draft))} placeholder="gpt-4o=deepseek-chat" />
-                </label>
-                <label className="field wide">
-                  <span>自定义请求头（每行 Key=Value）</span>
-                  <textarea value={headersText} onChange={(e) => setHeadersText(e.target.value)} onBlur={() => persistProvider(syncTextFields(draft))} placeholder="User-Agent=Mozilla/5.0" />
-                </label>
-              </div>
-            </div>
-
-            <div className="actionBar">
-              <button className="btn" onClick={testConnection} disabled={busy || !draft.base_url}>测试连接</button>
-              <button className="btn" onClick={fetchModels} disabled={busy || !draft.base_url}>拉取模型</button>
-              <button className="btn" onClick={activateProvider} disabled={busy || !draft.name}>设为当前供应商</button>
-              <button className="btn primary" onClick={applyRouterToHermes} disabled={busy || !draft.name || !draft.base_url}>初始化 Hermes 路由</button>
-            </div>
-
-            {message && <div className="message">{message}</div>}
           </section>
         ) : (
-          <section className="emptyState">
-            <div className="emptyBox">
-              <div className="emptyIcon">+</div>
-              <h2>请从左侧选择供应商，或点击“新建供应商”。</h2>
-              <p>选择一个模板可以快速填入 Base URL 和常见模型，之后只需要补上 API Key。</p>
-              <div className="presetGrid">
-                {providerPresets.map((preset) => (
-                  <button key={preset.name} className="presetCard" onClick={() => createProvider(preset)}>
-                    <strong>{preset.name}</strong>
-                    <span>{preset.default_model}</span>
-                  </button>
-                ))}
+          <section className="providerWorkspace">
+            <div className="providerHero">
+              <div className="providerIcon"><CloudCog size={25} /></div>
+              <div className="providerIdentity">
+                <div className="identityLine"><input aria-label="供应商名称" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} onBlur={() => persistProvider(syncTextFields(draft))} /><span className={selectedIsActive ? 'activeBadge' : 'idleBadge'}>{selectedIsActive ? '当前正在使用' : '待切换'}</span></div>
+                <p>{draft.base_url || '请填写上游 API 地址。'} </p>
               </div>
+              <div className="heroActions"><button className="button secondary" onClick={testConnection} disabled={busy || !draft.base_url}>{busy ? <LoaderCircle className="spin" size={16} /> : <Wifi size={16} />}测试连接</button><button className="button primary" onClick={activateProvider} disabled={busy || !draft.name}><CircleCheck size={16} />设为当前</button></div>
             </div>
+
+            <div className="healthGrid">
+              <article className="healthCard"><div className="healthIcon indigo"><Route size={18} /></div><div><span>路由状态</span><strong>{routerState}</strong><small>127.0.0.1:{config.router_port}</small></div></article>
+              <article className="healthCard"><div className="healthIcon emerald"><ServerCog size={18} /></div><div><span>当前上游</span><strong>{activeProvider?.name || '尚未选择'}</strong><small>{activeProvider?.default_model || '未设置模型'}</small></div></article>
+              <article className="healthCard"><div className="healthIcon amber"><Activity size={18} /></div><div><span>可用模型</span><strong>{draft.models.length}</strong><small>可通过 API 自动拉取</small></div></article>
+            </div>
+
+            <div className="contentGrid">
+              <section className="settingsCard connectionCard">
+                <div className="cardHead"><div><span className="eyebrow">CONNECTION</span><h2>连接设置</h2><p>用于安全连接第三方 OpenAI 兼容 API。</p></div><ShieldCheck size={21} /></div>
+                <div className="formGrid">
+                  <label className="formField wide"><span>Base URL</span><div className="inputWithIcon"><Link2 size={16} /><input value={draft.base_url} onChange={(event) => setDraft({ ...draft, base_url: event.target.value })} onBlur={() => persistProvider(syncTextFields(draft))} placeholder="https://api.example.com/v1" /></div></label>
+                  <label className="formField wide"><span>API Key</span><input type="password" value={draft.api_key} onChange={(event) => setDraft({ ...draft, api_key: event.target.value })} onBlur={() => persistProvider(syncTextFields(draft))} placeholder="填入 API Key，仅保存在本机" /></label>
+                  <label className="formField"><span>接口模式</span><select value={draft.api_mode} onChange={(event) => { const next = { ...draft, api_mode: event.target.value as Provider['api_mode'] }; setDraft(next); persistProvider(syncTextFields(next)) }}><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option></select></label>
+                  <label className="formField"><span>默认模型</span><input value={draft.default_model} onChange={(event) => setDraft({ ...draft, default_model: event.target.value })} onBlur={() => persistProvider(syncTextFields(draft))} placeholder="例如 deepseek-chat" /></label>
+                </div>
+                <div className="cardFooter"><button className="button ghost" onClick={fetchModels} disabled={busy || !draft.base_url}><RefreshCw size={16} />拉取模型</button><button className="button secondary" onClick={() => persistProvider(syncTextFields(draft))}><Save size={16} />保存连接</button></div>
+              </section>
+
+              <section className="settingsCard routerCard">
+                <div className="cardHead"><div><span className="eyebrow">ROUTER</span><h2>路由策略</h2><p>Hermes 固定访问本地地址，上游随当前供应商切换。</p></div><Route size={21} /></div>
+                <label className="formField"><span>本地端口</span><input type="number" value={config.router_port} onChange={(event) => saveConfig({ ...config, router_port: Number(event.target.value) || DEFAULT_PORT })} /></label>
+                <label className="toggleLine"><input type="checkbox" checked={config.auto_start_proxy} onChange={(event) => saveConfig({ ...config, auto_start_proxy: event.target.checked })} /><span className="toggleControl" /><span><strong>启动应用时自动运行路由</strong><small>建议保持开启，确保 Hermes 可随时访问。</small></span></label>
+                <label className="toggleLine"><input type="checkbox" checked={draft.strip_tools} onChange={(event) => { const next = { ...draft, strip_tools: event.target.checked }; setDraft(next); persistProvider(syncTextFields(next)) }} /><span className="toggleControl" /><span><strong>兼容模式</strong><small>删除 tools、tool_choice 等上游不支持字段。</small></span></label>
+                <div className="routerEndpoint"><span>Hermes 连接地址</span><code>{routerBaseUrl}</code></div>
+              </section>
+            </div>
+
+            <section className="settingsCard advancedCard">
+              <div className="cardHead"><div><span className="eyebrow">ADVANCED</span><h2>模型与请求适配</h2><p>模型列表用于向 Hermes 公开能力；映射和请求头会在本地路由中应用。</p></div><Settings2 size={21} /></div>
+              <div className="formGrid advancedGrid">
+                <label className="formField"><span>模型列表 <small>每行一个</small></span><textarea value={modelsText} onChange={(event) => setModelsText(event.target.value)} onBlur={() => persistProvider(syncTextFields(draft))} placeholder={'deepseek-chat\ndeepseek-reasoner'} /></label>
+                <label className="formField"><span>模型映射 <small>Hermes模型=上游模型</small></span><textarea value={mappingText} onChange={(event) => setMappingText(event.target.value)} onBlur={() => persistProvider(syncTextFields(draft))} placeholder="gpt-4o=deepseek-chat" /></label>
+                <label className="formField"><span>自定义请求头 <small>Key=Value</small></span><textarea value={headersText} onChange={(event) => setHeadersText(event.target.value)} onBlur={() => persistProvider(syncTextFields(draft))} placeholder="HTTP-Referer=https://example.com" /></label>
+              </div>
+              <div className="dangerZone"><div><strong>删除此供应商</strong><span>删除后本机保存的该供应商配置将无法恢复。</span></div><button className="button danger" onClick={() => removeProvider(draft.id)}><Trash2 size={16} />删除</button></div>
+            </section>
+
+            {message && <div className="toastMessage"><CircleCheck size={17} /><span>{message}</span></div>}
           </section>
         )}
       </main>

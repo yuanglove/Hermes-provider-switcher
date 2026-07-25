@@ -19,3 +19,5 @@ Thumbs.db
 *.backup-*
 config.json
 .hermes-provider-switcher/
+
+.serena/
