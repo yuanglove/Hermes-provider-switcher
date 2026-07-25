@@ -1,125 +1,72 @@
 # Hermes Provider Switcher
 
-Hermes Provider Switcher 是一个面向 Hermes Agent 的第三方模型供应商切换器。它把 Hermes 固定连接到本地 API 路由器，再由本工具转发到 DeepSeek、OpenRouter、Moyyu、OneAPI 或其他 OpenAI 兼容接口。
+`Hermes Provider Switcher v0.2.0` 是 Windows 桌面端的第三方模型供应商管理工具。它将 Hermes 或其他 AI 客户端接入本地路由，统一管理供应商、模型映射、资源同步与快速平台切换。
 
-## 核心能力
+## 功能
 
-- 管理多个第三方模型供应商
-- 一键把 Hermes `config.yaml` 初始化为本地路由模式
-- 本地路由地址固定为 `http://127.0.0.1:15722/v1`
-- 在软件内切换供应商，下一次 Hermes 请求立即走新的 API
-- 支持模型名映射，例如 `gpt-4o=deepseek-chat`
-- 支持删除第三方接口可能不兼容的字段：
-  - `tools`
-  - `tool_choice`
-  - `parallel_tool_calls`
-  - `reasoning_effort`
-- 支持自定义请求头
-- 支持测试连接和拉取 `/v1/models`
-- 写入 Hermes 配置前自动备份原文件
+- 管理多个 OpenAI 兼容 API 供应商，并在应用内快速切换。
+- 支持 Hermes、Claude Code、Claude Desktop、Codex、Gemini CLI、Grok Build、OpenCode、OpenClaw。
+- 本地路由模式：模型映射、自定义请求头、兼容字段清理、备用供应商故障切换。
+- Hermes 原生直连模式，按需写入 `config.yaml`；写入前自动备份。
+- 自动检测目标应用配置，支持一键应用当前供应商。
+- 独立管理与同步 MCP 服务器、提示词、Skills。
+- 导入/导出本地数据、默认工作区、路由用量记录和 Windows 开机启动。
+- 默认浅色主题，并跟随系统深浅色模式。
 
-## 工作原理
+## 本地路由
 
 ```text
-Hermes Agent
-  ↓
+Hermes / AI Client
+        |
 http://127.0.0.1:15722/v1
-  ↓
-Hermes Provider Switcher 本地路由器
-  ↓
-第三方 API 供应商
+        |
+Hermes Provider Switcher
+        |
+Third-party OpenAI-compatible API
 ```
 
-第一次使用时需要把 Hermes 配置初始化到本地路由器。之后切换模型供应商只需要在本软件中点击“设为当前供应商”，不需要反复修改 Hermes 配置。
+本地路由模式下，客户端固定连接本地地址。之后切换供应商、模型映射或请求头，不需要反复修改 Hermes 的配置。
 
-## 下载
+## 使用方式
 
-在 GitHub Releases 中下载：
+1. 打开软件，在供应商工作台新建供应商并填写 Base URL、API Key 和默认模型。
+2. 使用“测试连接”或“拉取模型”确认接口可用，然后设为当前供应商。
+3. 在“设置 -> 通用”选择 Hermes 的 `config.yaml`。
+4. 在“目标应用”选择 Hermes 或其他已检测到的平台，应用当前供应商。
+5. 启动本地路由；首次使用 Hermes 后重启 Hermes 应用。
 
-- `Hermes Provider Switcher Setup 1.0.0.exe`：安装版
-- `Hermes Provider Switcher 1.0.0.exe`：免安装版
+可在“设置 -> 本地路由”调整端口、接入模式、自动启动与备用供应商。
 
-## 使用方法
-
-1. 打开 Hermes Provider Switcher。
-2. 点击“选择配置”，选择 Hermes 的 `config.yaml`，例如：
-
-```text
-D:\AI\Hermes\config.yaml
-```
-
-3. 点击“新建供应商”，填写：
-
-```text
-供应商名称
-Base URL
-API Key
-默认模型
-模型列表
-模型映射
-```
-
-4. 点击“设为当前供应商”。
-5. 点击“启动路由器”。
-6. 点击“初始化 Hermes 路由”。
-7. 重启 Hermes Agent。
-
-之后切换供应商时，只需要在本软件中选择供应商并点击“设为当前供应商”。
-<img width="1807" height="1228" alt="image" src="https://github.com/user-attachments/assets/1859fb31-275c-4a4b-ac8b-30780684863d" />
-
-
-
-
-## Hermes 配置示例
-
-工具会把 Hermes 的 `model` 和 `custom_providers` 写成类似下面的结构：
-
-```yaml
-model:
-  provider: hermes-switcher
-  default: gpt-5.5
-  base_url: http://127.0.0.1:15722/v1
-  api_mode: chat_completions
-
-custom_providers:
-- name: hermes-switcher
-  base_url: http://127.0.0.1:15722/v1
-  api_key: local-router
-  api_mode: chat_completions
-  model: gpt-5.5
-  models:
-    gpt-5.5:
-      name: gpt-5.5
-```
-
-`custom_providers` 会保持 YAML list 格式，不会写成 `"0":` 这种错误结构。
-
-## 开发运行
+## 构建与打包
 
 ```bash
 npm install
 npm run dev
 ```
 
-Windows 也可以使用：
+构建应用：
 
 ```bash
-node dev.js
+npm run build
 ```
 
-## Windows 打包
+Windows 打包：
 
 ```bash
 npm run dist
 ```
 
-或者双击：
+也可运行 `dist-windows.bat`。输出包含 NSIS 安装包、Portable 免安装包以及 `win-unpacked` 解压版。
+
+## 本地数据与安全
+
+应用配置保存在：
 
 ```text
-dist-windows.bat
+%USERPROFILE%\.hermes-provider-switcher\config.json
 ```
 
-打包产物在 `release/` 目录。
+该文件可能包含 API Key。请勿上传该文件、导出文件或截图中的密钥到公开仓库。软件不会内置或上传 API Key。
 
 ## 技术栈
 
@@ -129,33 +76,6 @@ dist-windows.bat
 - Vite
 - js-yaml
 
-## 项目结构
-
-```text
-src/main/main.ts       Electron 主进程、IPC、本地路由器、Hermes YAML 写入
-src/main/preload.ts    contextBridge 安全 API
-src/renderer/App.tsx   主界面
-src/renderer/styles.css 样式
-src/shared/types.ts    共享类型
-```
-
-## 本地数据
-
-软件自身配置保存于：
-
-```text
-%USERPROFILE%\.hermes-provider-switcher\config.json
-```
-
-该文件可能包含 API Key，不要上传到 GitHub。
-
-## 注意事项
-
-- 修改 Hermes 配置后需要重启 Hermes Agent。
-- 如果端口 `15722` 被占用，可以在软件中修改路由端口。
-- 如果第三方 API 的真实模型名和 Hermes 里使用的模型名不同，请配置“模型映射”。
-- 本项目不会内置任何 API Key。
-
-## License
+## 开源协议
 
 MIT

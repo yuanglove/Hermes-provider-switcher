@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { AppConfig, Provider } from '../shared/types'
+import type { AppConfig, ManagedState, Provider } from '../shared/types'
 
 const IPC = {
   GET_CONFIG: 'get-config',
@@ -11,6 +11,22 @@ const IPC = {
   START_PROXY: 'start-proxy',
   STOP_PROXY: 'stop-proxy',
   GET_PROXY_STATUS: 'get-proxy-status',
+  GET_MANAGED_STATE: 'get-managed-state',
+  SAVE_MANAGED_STATE: 'save-managed-state',
+  SYNC_MCP: 'sync-mcp',
+  SYNC_PROMPTS: 'sync-prompts',
+  SYNC_SKILLS: 'sync-skills',
+  APPLY_CLI_PROVIDER: 'apply-cli-provider',
+  APPLY_OPENCODE_PROVIDER: 'apply-opencode-provider',
+  APPLY_CODEX_PROVIDER: 'apply-codex-provider',
+  APPLY_CLAUDE_DESKTOP_PROVIDER: 'apply-claude-desktop-provider',
+  APPLY_GROK_PROVIDER: 'apply-grok-provider',
+  APPLY_OPENCLAW_PROVIDER: 'apply-openclaw-provider',
+  GET_PLATFORM_STATUS: 'get-platform-status',
+  EXPORT_DATA: 'export-data',
+  IMPORT_DATA: 'import-data',
+  SELECT_WORKSPACE: 'select-workspace',
+  OPEN_WORKSPACE: 'open-workspace',
 } as const
 
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -24,4 +40,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
   startProxy: (provider: Provider) => ipcRenderer.invoke(IPC.START_PROXY, provider),
   stopProxy: () => ipcRenderer.invoke(IPC.STOP_PROXY),
   getProxyStatus: () => ipcRenderer.invoke(IPC.GET_PROXY_STATUS),
+  getManagedState: () => ipcRenderer.invoke(IPC.GET_MANAGED_STATE) as Promise<ManagedState>,
+  saveManagedState: (state: ManagedState) => ipcRenderer.invoke(IPC.SAVE_MANAGED_STATE, state),
+  syncMcp: (state: unknown, hermesConfigPath: string) => ipcRenderer.invoke(IPC.SYNC_MCP, state, hermesConfigPath),
+  syncPrompts: (state: unknown) => ipcRenderer.invoke(IPC.SYNC_PROMPTS, state),
+  syncSkills: (state: unknown) => ipcRenderer.invoke(IPC.SYNC_SKILLS, state),
+  applyCliProvider: (platform: 'claude-code' | 'gemini-cli', provider: Provider) => ipcRenderer.invoke(IPC.APPLY_CLI_PROVIDER, platform, provider),
+  applyOpenCodeProvider: (provider: Provider) => ipcRenderer.invoke(IPC.APPLY_OPENCODE_PROVIDER, provider),
+  applyCodexProvider: (provider: Provider) => ipcRenderer.invoke(IPC.APPLY_CODEX_PROVIDER, provider),
+  applyClaudeDesktopProvider: (provider: Provider) => ipcRenderer.invoke(IPC.APPLY_CLAUDE_DESKTOP_PROVIDER, provider),
+  applyGrokProvider: (provider: Provider) => ipcRenderer.invoke(IPC.APPLY_GROK_PROVIDER, provider),
+  applyOpenClawProvider: (provider: Provider) => ipcRenderer.invoke(IPC.APPLY_OPENCLAW_PROVIDER, provider),
+  getPlatformStatus: () => ipcRenderer.invoke(IPC.GET_PLATFORM_STATUS),
+  exportData: () => ipcRenderer.invoke(IPC.EXPORT_DATA),
+  importData: () => ipcRenderer.invoke(IPC.IMPORT_DATA),
+  selectWorkspace: () => ipcRenderer.invoke(IPC.SELECT_WORKSPACE),
+  openWorkspace: (workspacePath: string) => ipcRenderer.invoke(IPC.OPEN_WORKSPACE, workspacePath),
 })

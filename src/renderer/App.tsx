@@ -1,8 +1,31 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Activity, ChevronRight, CircleCheck, CirclePlus, CloudCog, Code2, FolderOpen, Link2, LoaderCircle, Play, PlugZap, Power, RefreshCw, Route, Save, ServerCog, Settings2, ShieldCheck, Trash2, Wifi, Zap } from 'lucide-react'
-import { AppConfig, Provider, ProxyStatus } from '../shared/types'
+import { Activity, BarChart3, ChevronRight, CircleCheck, CirclePlus, CloudCog, Code2, FileText, FolderOpen, Link2, LoaderCircle, MonitorCog, Play, PlugZap, Power, RefreshCw, Route, Save, Server, ServerCog, Settings2, ShieldCheck, Trash2, Wifi, Wrench, Zap } from 'lucide-react'
+import { AppConfig, PlatformId, PlatformStatus, Provider, ProxyStatus } from '../shared/types'
+import ResourcesPanel, { McpPanel, PromptsPanel, SkillsPanel } from './ResourcesPanel'
+import UsagePanel from './UsagePanel'
+import SettingsPanel from './SettingsPanel'
+import claudeIcon from './assets/platforms/claude.svg'
+import codexIcon from './assets/platforms/codex.svg'
+import geminiIcon from './assets/platforms/gemini.svg'
+import grokIcon from './assets/platforms/grok.svg'
+import openCodeIcon from './assets/platforms/opencode.svg'
+import openClawIcon from './assets/platforms/openclaw.svg'
+import hermesIcon from './assets/platforms/hermes.png'
 
 const DEFAULT_PORT = 15722
+
+type TargetPlatform = { id: PlatformId; name: string; kind: string; config: string; icon: string }
+
+const targetPlatforms: TargetPlatform[] = [
+  { id: 'claude-code', name: 'Claude Code', kind: '命令行版', config: 'settings.json / 环境变量', icon: claudeIcon },
+  { id: 'claude-desktop', name: 'Claude Desktop', kind: '桌面版', config: 'Claude Desktop 配置', icon: claudeIcon },
+  { id: 'codex', name: 'Codex', kind: '命令行版', config: 'config.toml / auth.json', icon: codexIcon },
+  { id: 'gemini-cli', name: 'Gemini CLI', kind: '命令行版', config: 'settings.json', icon: geminiIcon },
+  { id: 'grok-build', name: 'Grok Build', kind: '命令行版', config: 'config.toml', icon: grokIcon },
+  { id: 'opencode', name: 'OpenCode', kind: '命令行版', config: 'opencode.json', icon: openCodeIcon },
+  { id: 'openclaw', name: 'OpenClaw', kind: '桌面 / CLI', config: 'openclaw.json', icon: openClawIcon },
+  { id: 'hermes', name: 'Hermes', kind: '桌面 Agent', config: 'config.yaml', icon: hermesIcon },
+]
 
 const emptyProvider = (preset?: Partial<Provider>): Provider => ({
   id: Math.random().toString(36).slice(2, 10),
@@ -24,6 +47,9 @@ const emptyConfig: AppConfig = {
   active_provider_id: null,
   router_port: DEFAULT_PORT,
   auto_start_proxy: true,
+  launch_at_login: false,
+  workspace_root: '',
+  fallback_provider_ids: [],
   routing_mode: 'proxy',
   providers: [],
 }
@@ -69,9 +95,11 @@ export default function App() {
   const [mappingText, setMappingText] = useState('')
   const [headersText, setHeadersText] = useState('')
   const [proxyStatus, setProxyStatus] = useState<ProxyStatus>({ running: false, port: 0, provider_id: null })
+  const [platformStatus, setPlatformStatus] = useState<PlatformStatus[]>([])
+  const [quickPlatformId, setQuickPlatformId] = useState<PlatformId>('hermes')
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
-  const [activePanel, setActivePanel] = useState<'providers' | 'router' | 'targets'>('providers')
+  const [activePanel, setActivePanel] = useState<'providers' | 'settings' | 'targets' | 'resources' | 'mcp' | 'prompts' | 'skills' | 'usage'>('providers')
 
   useEffect(() => {
     window.electronAPI.getConfig().then((cfg) => {
@@ -81,6 +109,7 @@ export default function App() {
       if (id) selectProvider(id, next)
     })
     refreshProxyStatus()
+    window.electronAPI.getPlatformStatus().then(setPlatformStatus)
   }, [])
 
   const activeProvider = useMemo(
@@ -150,6 +179,11 @@ export default function App() {
   async function chooseHermesConfig() {
     const path = await window.electronAPI.selectHermesConfig()
     if (path) saveConfig({ ...config, hermes_config_path: path })
+  }
+
+  async function chooseWorkspace() {
+    const workspace = await window.electronAPI.selectWorkspace()
+    if (workspace) saveConfig({ ...config, workspace_root: workspace })
   }
 
   async function refreshProxyStatus() {
@@ -240,6 +274,42 @@ export default function App() {
     }
   }
 
+  async function applyCurrentProviderToPlatform(platformId: PlatformId) {
+    if (!draft) {
+      setMessage('请先选择并保存一个供应商。')
+      return
+    }
+    if (platformId === 'hermes' && !config.hermes_config_path) {
+      setMessage('请先选择 Hermes 的 config.yaml 文件。')
+      return
+    }
+    setBusy(true)
+    try {
+      const provider = syncTextFields(draft)
+      persistProvider(provider, true)
+      const result = platformId === 'hermes'
+        ? await window.electronAPI.applyProvider(config.hermes_config_path, provider)
+        : platformId === 'claude-code' || platformId === 'gemini-cli'
+          ? await window.electronAPI.applyCliProvider(platformId, provider)
+          : platformId === 'claude-desktop'
+            ? await window.electronAPI.applyClaudeDesktopProvider(provider)
+            : platformId === 'codex'
+              ? await window.electronAPI.applyCodexProvider(provider)
+              : platformId === 'grok-build'
+                ? await window.electronAPI.applyGrokProvider(provider)
+                : platformId === 'opencode'
+                  ? await window.electronAPI.applyOpenCodeProvider(provider)
+                  : await window.electronAPI.applyOpenClawProvider(provider)
+      setMessage(result.message)
+      if (platformId === 'hermes' && result.success && !proxyStatus.running) {
+        setProxyStatus(await window.electronAPI.startProxy({ ...provider, proxy_port: config.router_port }))
+      }
+      window.electronAPI.getPlatformStatus().then(setPlatformStatus)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const routerState = proxyStatus.running ? '运行中' : '未启动'
 
   return (
@@ -248,9 +318,10 @@ export default function App() {
         <div className="appLogo"><Route size={22} strokeWidth={2.4} /></div>
         <div className="railGroup">
           <button className={`railButton ${activePanel === "providers" ? "active" : ""}`} onClick={() => setActivePanel("providers")} title="供应商工作台"><CloudCog size={19} /></button>
-          <button className={`railButton ${activePanel === "router" ? "active" : ""}`} onClick={() => setActivePanel("router")} title="路由设置"><Settings2 size={19} /></button>
+          <button className={`railButton ${activePanel === "settings" ? "active" : ""}`} onClick={() => setActivePanel("settings")} title="设置"><Settings2 size={19} /></button>
+          <button className={`railButton ${activePanel === "targets" ? "active" : ""}`} onClick={() => setActivePanel("targets")} title="目标应用"><MonitorCog size={19} /></button>
         </div>
-        <div className="railBottom"><button className={`railButton ${activePanel === "targets" ? "active" : ""}`} onClick={() => setActivePanel("targets")} title="目标应用"><Code2 size={19} /></button></div>
+        <div className="railBottom"><button className={`railButton ${activePanel === "resources" ? "active" : ""}`} onClick={() => setActivePanel("resources")} title="资源中心"><Code2 size={19} /></button><button className={`railButton ${activePanel === "mcp" ? "active" : ""}`} onClick={() => setActivePanel("mcp")} title="MCP 服务器"><Server size={19} /></button><button className={`railButton ${activePanel === "prompts" ? "active" : ""}`} onClick={() => setActivePanel("prompts")} title="提示词"><FileText size={19} /></button><button className={`railButton ${activePanel === "skills" ? "active" : ""}`} onClick={() => setActivePanel("skills")} title="Skills"><Wrench size={19} /></button><button className={`railButton ${activePanel === "usage" ? "active" : ""}`} onClick={() => setActivePanel("usage")} title="会话与用量"><BarChart3 size={19} /></button></div>
       </aside>
 
       <aside className="providerSidebar">
@@ -291,35 +362,25 @@ export default function App() {
           </div>
         </header>
 
-        {activePanel === "router" ? (
-          <section className="utilityWorkspace">
-            <span className="eyebrow">LOCAL ROUTER</span>
-            <h2>本地路由控制</h2>
-            <p>Hermes 固定连接本机地址；切换供应商时，无需再次改写 Hermes 配置。</p>
-            <div className="utilityGrid">
-              <article className="utilityCard"><Route size={22} /><strong>{proxyStatus.running ? "路由器运行中" : "路由器未启动"}</strong><span>{routerBaseUrl}</span><button className="button primary" onClick={proxyStatus.running ? stopRouter : startRouter} disabled={busy}>{proxyStatus.running ? <Power size={16} /> : <Play size={16} />}{proxyStatus.running ? "停止路由" : "启动路由"}</button></article>
-              <article className="utilityCard"><FolderOpen size={22} /><strong>Hermes 配置文件</strong><span>{config.hermes_config_path || "尚未选择 config.yaml"}</span><button className="button secondary" onClick={chooseHermesConfig}>选择配置文件</button></article>
-              <article className="utilityCard"><Settings2 size={22} /><strong>监听端口</strong><label className="formField"><input type="number" value={config.router_port} onChange={(event) => saveConfig({ ...config, router_port: Number(event.target.value) || DEFAULT_PORT })} /></label><button className="button secondary" onClick={refreshProxyStatus}><RefreshCw size={16} />刷新状态</button></article>
-            </div>
-          </section>
-        ) : activePanel === "targets" ? (
+        {activePanel === "resources" ? <ResourcesPanel hermesConfigPath={config.hermes_config_path} provider={draft} onNavigate={setActivePanel} /> : activePanel === "mcp" ? <McpPanel hermesConfigPath={config.hermes_config_path} /> : activePanel === "prompts" ? <PromptsPanel /> : activePanel === "skills" ? <SkillsPanel /> : activePanel === "usage" ? <UsagePanel /> : activePanel === "settings" ? <SettingsPanel config={config} proxyStatus={proxyStatus} routerBaseUrl={routerBaseUrl} onSaveConfig={saveConfig} onChooseHermesConfig={chooseHermesConfig} onChooseWorkspace={chooseWorkspace} onOpenWorkspace={() => { if (config.workspace_root) void window.electronAPI.openWorkspace(config.workspace_root).then((result) => setMessage(result.message)) }} /> : activePanel === "targets" ? (
           <section className="utilityWorkspace">
             <span className="eyebrow">TARGET APPLICATIONS</span>
             <h2>目标应用</h2>
-            <p>cc-switch 支持的八个平台。当前版本已启用 Hermes 的原生配置与本地路由双模式；其余平台适配器将按各自配置格式逐项接入。</p>
+            <p>八个平台均可应用当前供应商；每个平台均保留原配置并按其原生格式写入。</p>
             <div className="targetGrid">
-              {[
-                ["Claude Code", "命令行版", "settings.json / 环境变量"],
-                ["Claude Desktop", "桌面版", "独立 3P 配置"],
-                ["Codex", "命令行版", "config.toml / auth.json"],
-                ["Gemini CLI", "命令行版", "settings.json"],
-                ["Grok Build", "命令行版", "配置文件"],
-                ["OpenCode", "命令行版", "opencode.json"],
-                ["OpenClaw", "桌面 / CLI", "应用配置"],
-                ["Hermes", "桌面 Agent", "config.yaml"],
-              ].map(([name, kind, format]) => (
-                <article key={name} className={`targetCard ${name === "Hermes" ? "enabled" : ""}`}><Code2 size={19} /><div><strong>{name}</strong><span>{kind}</span><small>{format}</small></div><em>{name === "Hermes" ? "已启用" : "适配中"}</em></article>
-              ))}
+              {targetPlatforms.map((platform) => {
+                const status = platformStatus.find((item) => item.id === platform.id)
+                return <button type="button" key={platform.id} className={`targetCard targetButton ${status?.detected ? 'enabled' : ''} ${quickPlatformId === platform.id ? 'selected' : ''}`} onClick={() => setQuickPlatformId(platform.id)}>
+                  <img className="platformBrandIcon" src={platform.icon} alt="" />
+                  <div><strong>{platform.name}</strong><span>{platform.kind}</span><small>{status?.configPath || platform.config}</small></div><em>{status?.detected ? '已检测' : '未检测'}</em>
+                </button>
+              })}
+            </div>
+            <div className="quickPlatformBar">
+              <div className="quickPlatformTabs" role="tablist" aria-label="快速切换目标平台">
+                {targetPlatforms.map((platform) => <button key={platform.id} type="button" className={quickPlatformId === platform.id ? 'quickPlatformTab selected' : 'quickPlatformTab'} onClick={() => setQuickPlatformId(platform.id)} role="tab" aria-selected={quickPlatformId === platform.id}><img src={platform.icon} alt="" />{platform.name}</button>)}
+              </div>
+              <div className="quickPlatformAction"><span>当前目标：{targetPlatforms.find((platform) => platform.id === quickPlatformId)?.name}</span><button className="button primary" disabled={busy || !draft} onClick={() => void applyCurrentProviderToPlatform(quickPlatformId)}><Zap size={16}/>应用当前供应商</button></div>
             </div>
           </section>
         ) : !draft ? (
@@ -366,7 +427,9 @@ export default function App() {
                 <label className="formField"><span>接入模式</span><select value={config.routing_mode} onChange={(event) => saveConfig({ ...config, routing_mode: event.target.value as AppConfig['routing_mode'] })}><option value="proxy">本地路由增强</option><option value="native">Hermes 原生直连</option></select></label>
                 <label className="formField"><span>本地端口</span><input type="number" value={config.router_port} onChange={(event) => saveConfig({ ...config, router_port: Number(event.target.value) || DEFAULT_PORT })} /></label>
                 <div className="modeHint">{config.routing_mode === 'native' ? '原生直连会保留多个 Hermes 供应商；模型映射、自定义请求头与字段清洗请使用本地路由模式。' : '本地路由支持模型映射、自定义请求头和兼容字段清洗，适合第三方接口。'}</div>
+                <label className="formField"><span>故障切换备用供应商 <small>按列表顺序重试网络失败的请求</small></span><select multiple value={config.fallback_provider_ids} onChange={(event) => saveConfig({ ...config, fallback_provider_ids: Array.from(event.currentTarget.selectedOptions).map((option) => option.value) })}>{config.providers.filter((provider) => provider.id !== config.active_provider_id).map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
                 <label className="toggleLine"><input type="checkbox" checked={config.auto_start_proxy} onChange={(event) => saveConfig({ ...config, auto_start_proxy: event.target.checked })} /><span className="toggleControl" /><span><strong>启动应用时自动运行路由</strong><small>建议保持开启，确保 Hermes 可随时访问。</small></span></label>
+                <label className="toggleLine"><input type="checkbox" checked={config.launch_at_login} onChange={(event) => saveConfig({ ...config, launch_at_login: event.target.checked })} /><span className="toggleControl" /><span><strong>随 Windows 启动</strong><small>设置会写入系统登录项；关闭后会立即移除。</small></span></label>
                 <label className="toggleLine"><input type="checkbox" checked={draft.strip_tools} onChange={(event) => { const next = { ...draft, strip_tools: event.target.checked }; setDraft(next); persistProvider(syncTextFields(next)) }} /><span className="toggleControl" /><span><strong>兼容模式</strong><small>删除 tools、tool_choice 等上游不支持字段。</small></span></label>
                 <div className="routerEndpoint"><span>Hermes 连接地址</span><code>{routerBaseUrl}</code></div>
               </section>

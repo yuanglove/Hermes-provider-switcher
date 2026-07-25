@@ -1,6 +1,8 @@
 node_modules/
 dist/
 release/
+release-*/
+.smoke-profile*/
 
 .env
 .env.*

@@ -1,6 +1,6 @@
 {
   "name": "hermes-provider-switcher",
-  "version": "1.0.0",
+  "version": "0.2.0",
   "description": "Hermes Agent 第三方模型供应商切换器",
   "main": "dist/main/main/main.js",
   "author": "Hermes",
@@ -15,7 +15,9 @@
     "dist": "npm run build && electron-builder --win --publish never"
   },
   "dependencies": {
+    "@iarna/toml": "^2.2.5",
     "js-yaml": "^4.1.0",
+    "json5": "^2.2.3",
     "lucide-react": "^1.26.0"
   },
   "devDependencies": {
