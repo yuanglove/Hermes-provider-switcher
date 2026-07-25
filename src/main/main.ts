@@ -29,6 +29,7 @@ const DEFAULT_CONFIG: AppConfig = {
   active_provider_id: null,
   router_port: 15722,
   auto_start_proxy: true,
+  routing_mode: 'proxy',
   providers: [],
 }
 
@@ -51,6 +52,7 @@ function normalizeConfig(raw: Partial<AppConfig>): AppConfig {
     ...raw,
     router_port: raw.router_port || raw.providers?.[0]?.proxy_port || DEFAULT_CONFIG.router_port,
     auto_start_proxy: raw.auto_start_proxy ?? DEFAULT_CONFIG.auto_start_proxy,
+    routing_mode: raw.routing_mode === 'native' ? 'native' : 'proxy',
     providers: raw.providers || [],
   }
 }
@@ -265,9 +267,7 @@ function backupHermesConfig(configPath: string): string {
 
 function applyProviderToHermes(configPath: string, provider: Provider): ApplyResult {
   try {
-    if (!fs.existsSync(configPath)) {
-      return { success: false, message: `找不到配置文件：${configPath}` }
-    }
+    if (!fs.existsSync(configPath)) return { success: false, message: `找不到配置文件：${configPath}` }
 
     const cfg = loadConfig()
     const routerPort = cfg.router_port || provider.proxy_port || DEFAULT_CONFIG.router_port
@@ -280,31 +280,32 @@ function applyProviderToHermes(configPath: string, provider: Provider): ApplyRes
       doc = {}
     }
 
-    const baseUrl = `http://127.0.0.1:${routerPort}/v1`
     const model = provider.default_model || provider.models[0] || 'gpt-4o'
+    const modelsMap: Record<string, { name: string }> = {}
+    for (const item of Array.from(new Set([model, ...(provider.models || [])])).filter(Boolean)) modelsMap[item] = { name: item }
+
+    const isNative = cfg.routing_mode === 'native'
+    const providerName = isNative ? (provider.name.trim() || 'hermes-provider') : ROUTER_PROVIDER_NAME
+    const baseUrl = isNative ? provider.base_url.replace(/\/+$/, '') : `http://127.0.0.1:${routerPort}/v1`
+    const apiKey = isNative ? provider.api_key : 'local-router'
 
     doc.model = {
-      provider: ROUTER_PROVIDER_NAME,
+      provider: providerName,
       default: model,
       base_url: baseUrl,
       api_mode: provider.api_mode || 'chat_completions',
     }
 
-    const modelsMap: Record<string, { name: string }> = {}
-    const hermesModels = Array.from(new Set([model, ...(provider.models || [])])).filter(Boolean)
-    for (const m of hermesModels) modelsMap[m] = { name: m }
-
-    let existingProviders: any[] = []
-    if (Array.isArray(doc.custom_providers)) {
-      existingProviders = doc.custom_providers.filter((p: any) => p?.name !== ROUTER_PROVIDER_NAME)
-    }
+    const existingProviders = Array.isArray(doc.custom_providers)
+      ? doc.custom_providers.filter((item: any) => item?.name !== providerName)
+      : []
 
     doc.custom_providers = [
       ...existingProviders,
       {
-        name: ROUTER_PROVIDER_NAME,
+        name: providerName,
         base_url: baseUrl,
-        api_key: 'local-router',
+        api_key: apiKey,
         api_mode: provider.api_mode || 'chat_completions',
         model,
         models: modelsMap,
@@ -312,13 +313,12 @@ function applyProviderToHermes(configPath: string, provider: Provider): ApplyRes
     ]
 
     fs.writeFileSync(configPath, yaml.dump(doc, { indent: 2, lineWidth: -1, noRefs: true }), 'utf8')
-    log(`Applied router config to Hermes. backup=${backupPath}`)
+    const message = isNative
+      ? `已将 ${providerName} 写入 Hermes 原生供应商列表并设为当前模型。备份：${path.basename(backupPath)}`
+      : `已把 Hermes 固定指向本地路由器 ${baseUrl}。以后切换供应商只需要在本软件里选择并启动路由器。备份：${path.basename(backupPath)}`
+    log(`Applied ${isNative ? 'native' : 'router'} Hermes config. backup=${backupPath}`)
 
-    return {
-      success: true,
-      message: `已把 Hermes 固定指向本地路由器 ${baseUrl}。以后切换供应商只需要在本软件里选择并启动路由器。备份：${path.basename(backupPath)}`,
-      backup_path: backupPath,
-    }
+    return { success: true, message, backup_path: backupPath }
   } catch (e) {
     return { success: false, message: `写入失败：${e}` }
   }

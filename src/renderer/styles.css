@@ -151,3 +151,25 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .headerActions, .heroActions { flex-wrap: wrap; }
   .healthGrid, .templateCards { grid-template-columns: 1fr; }
 }
+
+.utilityWorkspace { flex: 1; overflow: auto; padding: 44px 42px; }
+.utilityWorkspace h2 { margin: 7px 0 8px; color: #eef2f8; font-size: 24px; }
+.utilityWorkspace > p { max-width: 700px; margin: 0 0 25px; color: #9eabbc; font-size: 13px; line-height: 1.7; }
+.utilityGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.utilityCard { min-height: 205px; display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 19px; border: 1px solid #344052; border-radius: 8px; color: #b9c7ff; background: #1c222c; }
+.utilityCard strong { color: #edf2f8; font-size: 14px; }
+.utilityCard span { min-height: 34px; overflow: hidden; width: 100%; color: #9ba8bb; font: 11px/1.45 Consolas, monospace; text-overflow: ellipsis; }
+.utilityCard .button { margin-top: auto; }
+.targetGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; max-width: 920px; }
+.targetCard { min-width: 0; display: grid; grid-template-columns: 23px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 14px; border: 1px solid #354052; border-radius: 7px; color: #96a5bd; background: #1c222c; }
+.targetCard.enabled { border-color: #4f69d7; color: #c0cdff; background: #222c49; }
+.targetCard div { min-width: 0; display: grid; gap: 3px; }
+.targetCard strong, .targetCard span, .targetCard small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.targetCard strong { color: #e9eef7; font-size: 13px; }
+.targetCard span, .targetCard small { color: #96a3b6; font-size: 11px; }
+.targetCard em { padding: 4px 6px; border-radius: 4px; color: #a8b4c6; background: #2b3443; font-size: 10px; font-style: normal; white-space: nowrap; }
+.targetCard.enabled em { color: #97e5be; background: rgba(41, 157, 103, .18); }
+@media (max-width: 1080px) { .utilityGrid { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .utilityWorkspace { padding: 28px 22px; } .targetGrid { grid-template-columns: 1fr; } }
+
+.modeHint { margin-top: 13px; padding: 9px 10px; border-left: 2px solid #667de0; border-radius: 4px; color: #aeb9cc; background: #171d27; font-size: 11px; line-height: 1.55; }

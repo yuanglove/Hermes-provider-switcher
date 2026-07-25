@@ -27,6 +27,7 @@ export interface AppConfig {
   active_provider_id: string | null
   router_port: number
   auto_start_proxy: boolean
+  routing_mode: 'proxy' | 'native'
   providers: Provider[]
 }
 

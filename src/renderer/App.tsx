@@ -24,6 +24,7 @@ const emptyConfig: AppConfig = {
   active_provider_id: null,
   router_port: DEFAULT_PORT,
   auto_start_proxy: true,
+  routing_mode: 'proxy',
   providers: [],
 }
 
@@ -70,6 +71,7 @@ export default function App() {
   const [proxyStatus, setProxyStatus] = useState<ProxyStatus>({ running: false, port: 0, provider_id: null })
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
+  const [activePanel, setActivePanel] = useState<'providers' | 'router' | 'targets'>('providers')
 
   useEffect(() => {
     window.electronAPI.getConfig().then((cfg) => {
@@ -245,10 +247,10 @@ export default function App() {
       <aside className="appRail">
         <div className="appLogo"><Route size={22} strokeWidth={2.4} /></div>
         <div className="railGroup">
-          <button className="railButton active" title="供应商工作台"><CloudCog size={19} /></button>
-          <button className="railButton" title="路由设置"><Settings2 size={19} /></button>
+          <button className={`railButton ${activePanel === "providers" ? "active" : ""}`} onClick={() => setActivePanel("providers")} title="供应商工作台"><CloudCog size={19} /></button>
+          <button className={`railButton ${activePanel === "router" ? "active" : ""}`} onClick={() => setActivePanel("router")} title="路由设置"><Settings2 size={19} /></button>
         </div>
-        <div className="railBottom"><button className="railButton" title="帮助"><Code2 size={19} /></button></div>
+        <div className="railBottom"><button className={`railButton ${activePanel === "targets" ? "active" : ""}`} onClick={() => setActivePanel("targets")} title="目标应用"><Code2 size={19} /></button></div>
       </aside>
 
       <aside className="providerSidebar">
@@ -289,7 +291,38 @@ export default function App() {
           </div>
         </header>
 
-        {!draft ? (
+        {activePanel === "router" ? (
+          <section className="utilityWorkspace">
+            <span className="eyebrow">LOCAL ROUTER</span>
+            <h2>本地路由控制</h2>
+            <p>Hermes 固定连接本机地址；切换供应商时，无需再次改写 Hermes 配置。</p>
+            <div className="utilityGrid">
+              <article className="utilityCard"><Route size={22} /><strong>{proxyStatus.running ? "路由器运行中" : "路由器未启动"}</strong><span>{routerBaseUrl}</span><button className="button primary" onClick={proxyStatus.running ? stopRouter : startRouter} disabled={busy}>{proxyStatus.running ? <Power size={16} /> : <Play size={16} />}{proxyStatus.running ? "停止路由" : "启动路由"}</button></article>
+              <article className="utilityCard"><FolderOpen size={22} /><strong>Hermes 配置文件</strong><span>{config.hermes_config_path || "尚未选择 config.yaml"}</span><button className="button secondary" onClick={chooseHermesConfig}>选择配置文件</button></article>
+              <article className="utilityCard"><Settings2 size={22} /><strong>监听端口</strong><label className="formField"><input type="number" value={config.router_port} onChange={(event) => saveConfig({ ...config, router_port: Number(event.target.value) || DEFAULT_PORT })} /></label><button className="button secondary" onClick={refreshProxyStatus}><RefreshCw size={16} />刷新状态</button></article>
+            </div>
+          </section>
+        ) : activePanel === "targets" ? (
+          <section className="utilityWorkspace">
+            <span className="eyebrow">TARGET APPLICATIONS</span>
+            <h2>目标应用</h2>
+            <p>cc-switch 支持的八个平台。当前版本已启用 Hermes 的原生配置与本地路由双模式；其余平台适配器将按各自配置格式逐项接入。</p>
+            <div className="targetGrid">
+              {[
+                ["Claude Code", "命令行版", "settings.json / 环境变量"],
+                ["Claude Desktop", "桌面版", "独立 3P 配置"],
+                ["Codex", "命令行版", "config.toml / auth.json"],
+                ["Gemini CLI", "命令行版", "settings.json"],
+                ["Grok Build", "命令行版", "配置文件"],
+                ["OpenCode", "命令行版", "opencode.json"],
+                ["OpenClaw", "桌面 / CLI", "应用配置"],
+                ["Hermes", "桌面 Agent", "config.yaml"],
+              ].map(([name, kind, format]) => (
+                <article key={name} className={`targetCard ${name === "Hermes" ? "enabled" : ""}`}><Code2 size={19} /><div><strong>{name}</strong><span>{kind}</span><small>{format}</small></div><em>{name === "Hermes" ? "已启用" : "适配中"}</em></article>
+              ))}
+            </div>
+          </section>
+        ) : !draft ? (
           <section className="emptyWorkspace">
             <div className="emptyGlyph"><PlugZap size={34} /></div>
             <span className="eyebrow">开始配置</span>
@@ -330,7 +363,9 @@ export default function App() {
 
               <section className="settingsCard routerCard">
                 <div className="cardHead"><div><span className="eyebrow">ROUTER</span><h2>路由策略</h2><p>Hermes 固定访问本地地址，上游随当前供应商切换。</p></div><Route size={21} /></div>
+                <label className="formField"><span>接入模式</span><select value={config.routing_mode} onChange={(event) => saveConfig({ ...config, routing_mode: event.target.value as AppConfig['routing_mode'] })}><option value="proxy">本地路由增强</option><option value="native">Hermes 原生直连</option></select></label>
                 <label className="formField"><span>本地端口</span><input type="number" value={config.router_port} onChange={(event) => saveConfig({ ...config, router_port: Number(event.target.value) || DEFAULT_PORT })} /></label>
+                <div className="modeHint">{config.routing_mode === 'native' ? '原生直连会保留多个 Hermes 供应商；模型映射、自定义请求头与字段清洗请使用本地路由模式。' : '本地路由支持模型映射、自定义请求头和兼容字段清洗，适合第三方接口。'}</div>
                 <label className="toggleLine"><input type="checkbox" checked={config.auto_start_proxy} onChange={(event) => saveConfig({ ...config, auto_start_proxy: event.target.checked })} /><span className="toggleControl" /><span><strong>启动应用时自动运行路由</strong><small>建议保持开启，确保 Hermes 可随时访问。</small></span></label>
                 <label className="toggleLine"><input type="checkbox" checked={draft.strip_tools} onChange={(event) => { const next = { ...draft, strip_tools: event.target.checked }; setDraft(next); persistProvider(syncTextFields(next)) }} /><span className="toggleControl" /><span><strong>兼容模式</strong><small>删除 tools、tool_choice 等上游不支持字段。</small></span></label>
                 <div className="routerEndpoint"><span>Hermes 连接地址</span><code>{routerBaseUrl}</code></div>
