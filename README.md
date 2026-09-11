@@ -1,8 +1,6 @@
-# Hermes Provider Switcher（重置版）
+# Hermes Provider Switcher
 
 面向 Hermes、Claude Code/Desktop、Codex、Gemini CLI、Grok Build、OpenCode 和 OpenClaw 的本地配置工作台。项目在保留 CCS 配置管理能力的基础上，使用 Tauri 2 + Rust 原生核心，重点减少启动阶段工作，并将常用操作集中到单页工作台。
-
-> 当前目录是独立重置版，不会自动推送 GitHub，也不会覆盖旧项目。功能参考 CC Switch，界面、图标和品牌保持独立。
 
 ## 已实现能力
 
@@ -30,7 +28,6 @@
 
 参考项目：[CC Switch](https://github.com/farion1231/cc-switch)。本项目仅借鉴其公开的配置管理思路和功能组织，品牌、发布签名和上游推广内容不作为本项目发布信息。
 
-视觉与交互说明见 [`docs/DESIGN-RESET.md`](docs/DESIGN-RESET.md)。应用图标采用带光环的黑洞图形，平台切换和资源操作集中在独立的工作区标签中。
 
 ## 开发
 
