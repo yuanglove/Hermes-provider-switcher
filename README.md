@@ -1,81 +1,72 @@
-# Hermes Provider Switcher
+# Hermes Provider Switcher（重置版）
 
-`Hermes Provider Switcher v0.2.0` 是 Windows 桌面端的第三方模型供应商管理工具。它将 Hermes 或其他 AI 客户端接入本地路由，统一管理供应商、模型映射、资源同步与快速平台切换。
+面向 Hermes、Claude Code/Desktop、Codex、Gemini CLI、Grok Build、OpenCode 和 OpenClaw 的本地配置工作台。项目在保留 CCS 配置管理能力的基础上，使用 Tauri 2 + Rust 原生核心，重点减少启动阶段工作，并将常用操作集中到单页工作台。
 
-## 功能
+> 当前目录是独立重置版，不会自动推送 GitHub，也不会覆盖旧项目。功能参考 CC Switch，界面、图标和品牌保持独立。
 
-- 管理多个 OpenAI 兼容 API 供应商，并在应用内快速切换。
-- 支持 Hermes、Claude Code、Claude Desktop、Codex、Gemini CLI、Grok Build、OpenCode、OpenClaw。
-- 本地路由模式：模型映射、自定义请求头、兼容字段清理、备用供应商故障切换。
-- Hermes 原生直连模式，按需写入 `config.yaml`；写入前自动备份。
-- 自动检测目标应用配置，支持一键应用当前供应商。
-- 独立管理与同步 MCP 服务器、提示词、Skills。
-- 导入/导出本地数据、默认工作区、路由用量记录和 Windows 开机启动。
-- 默认浅色主题，并跟随系统深浅色模式。
+## 已实现能力
 
-## 本地路由
+- 多平台供应商、模型与自定义 API 配置
+- 平台配置写入、当前供应商切换、备份与恢复
+- Hermes `config.yaml` 的供应商/模型映射和 MCP 往返保留
+- 本地路由、故障转移、请求修正器、用量统计
+- MCP、Skills、提示词、项目 Profile、会话和工作区管理
+- Claude Code/Desktop、Codex、Gemini、Grok Build、OpenCode、OpenClaw、Hermes 的独立配置入口
+- OAuth/额度查询、工具版本检测、安装命令、冲突诊断
+- WebDAV/S3 同步、SQL 导入导出、深链接导入
+- 中文界面、浅色默认主题、跟随系统主题、键盘焦点和减少动效支持
+- 设置页中的应用目录、日志、路由、高级选项、备份和关于信息
 
-```text
-Hermes / AI Client
-        |
-http://127.0.0.1:15722/v1
-        |
-Hermes Provider Switcher
-        |
-Third-party OpenAI-compatible API
+## 与旧版本的区别
+
+| 项目 | 旧版 | 重置版 |
+| --- | --- | --- |
+| 应用壳 | Electron 31 | Tauri 2 + Rust |
+| 启动阶段 | 可能同时触发版本/工具检查 | 不在启动时联网或扫描工具，进入设置后按需检查 |
+| 数据目录 | `.hermes-provider-switcher` | 默认 `.hermes-provider-switcher-reset` |
+| 更新检查 | 依赖旧更新流程 | 限时读取本项目 GitHub Release 元数据，下载从发布页手动完成 |
+| YAML 运行时 | js-yaml | Rust YAML 解析；输入审计与大小限制持续完善 |
+| UI | 页面跳转较多 | 紧凑工作台导航，供应商、资源和设置可直接切换 |
+
+参考项目：[CC Switch](https://github.com/farion1231/cc-switch)。本项目仅借鉴其公开的配置管理思路和功能组织，品牌、发布签名和上游推广内容不作为本项目发布信息。
+
+视觉与交互说明见 [`docs/DESIGN-RESET.md`](docs/DESIGN-RESET.md)。应用图标采用带光环的黑洞图形，平台切换和资源操作集中在独立的工作区标签中。
+
+## 开发
+
+```powershell
+cd D:\AI\智能体工作目录\claude工作目录\Hermes第三方模型工具\hermes-provider-switcher-reset-ccs-core
+pnpm install
+pnpm run typecheck
+pnpm run test:unit
+pnpm run build:renderer
+pnpm run build
 ```
 
-本地路由模式下，客户端固定连接本地地址。之后切换供应商、模型映射或请求头，不需要反复修改 Hermes 的配置。
+首次构建 Tauri 桌面包需要本机 Windows SDK、WebView2 和 Rust 构建环境。构建产物在 `src-tauri\target\release\bundle\`。
 
-## 使用方式
+## 数据位置
 
-1. 打开软件，在供应商工作台新建供应商并填写 Base URL、API Key 和默认模型。
-2. 使用“测试连接”或“拉取模型”确认接口可用，然后设为当前供应商。
-3. 在“设置 -> 通用”选择 Hermes 的 `config.yaml`。
-4. 在“目标应用”选择 Hermes 或其他已检测到的平台，应用当前供应商。
-5. 启动本地路由；首次使用 Hermes 后重启 Hermes 应用。
+默认应用数据目录为 `%USERPROFILE%\.hermes-provider-switcher-reset`。如需将数据放到 D 盘，可在启动前设置：
 
-可在“设置 -> 本地路由”调整端口、接入模式、自动启动与备用供应商。
-
-## 构建与打包
-
-```bash
-npm install
-npm run dev
+```powershell
+$env:HERMES_PROVIDER_SWITCHER_DATA_DIR='D:\HermesProviderSwitcher\data'
+pnpm run dev
 ```
 
-构建应用：
+便携版在可执行文件旁放置 `portable.ini` 后，会把应用数据库、日志、备份及 Windows WebView2 数据放到便携目录内。旧版目录和 CCS 目录不会自动合并。
 
-```bash
-npm run build
-```
+## 更新检查说明
 
-Windows 打包：
+“检查更新”只读取 GitHub Release 元数据，并设置明确的网络超时；发现新版本后打开发布页。未配置发布签名时不执行静默下载或自动安装，避免出现界面卡住、半安装或签名不匹配。
 
-```bash
-npm run dist
-```
+## 安全与数据
 
-也可运行 `dist-windows.bat`。输出包含 NSIS 安装包、Portable 免安装包以及 `win-unpacked` 解压版。
+- API Key 仅用于写入用户选择的平台配置；日志展示会脱敏。
+- 配置写入前保留备份。
+- 不会自动上传源代码、配置文件、日志或凭据。
+- 邮件中的第三方扫描链接不属于本项目运行流程。
 
-## 本地数据与安全
+## 许可证
 
-应用配置保存在：
-
-```text
-%USERPROFILE%\.hermes-provider-switcher\config.json
-```
-
-该文件可能包含 API Key。请勿上传该文件、导出文件或截图中的密钥到公开仓库。软件不会内置或上传 API Key。
-
-## 技术栈
-
-- Electron 31
-- React 18
-- TypeScript 5
-- Vite
-- js-yaml
-
-## 开源协议
-
-MIT
+MIT。感谢 [CC Switch](https://github.com/farion1231/cc-switch) 的公开项目参考。
